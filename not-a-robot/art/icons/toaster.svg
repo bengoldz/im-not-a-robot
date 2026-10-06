@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 512 512">
+  <defs>
+    <path id="toast1" d="M148 236 L148 140 Q128 130 136 108 Q148 84 186 88 Q224 84 236 108 Q244 130 224 140 L224 236 Z"/>
+    <path id="toast2" d="M262 236 L262 162 Q246 154 252 136 Q262 116 292 118 Q322 116 332 136 Q338 154 322 162 L322 236 Z"/>
+    <rect id="body" x="84" y="208" width="320" height="216" rx="46"/>
+    <clipPath id="toast1-c"><use xlink:href="#toast1"/></clipPath>
+    <clipPath id="toast2-c"><use xlink:href="#toast2"/></clipPath>
+    <clipPath id="body-c"><use xlink:href="#body"/></clipPath>
+    <clipPath id="body-lit"><use xlink:href="#body" transform="translate(-22 -20)"/></clipPath>
+  </defs>
+  <g stroke-linejoin="round" stroke-linecap="round">
+    <!-- toast -->
+    <use xlink:href="#toast1" fill="#1d2433" stroke="#1d2433" stroke-width="28"/>
+    <g clip-path="url(#toast1-c)">
+      <rect x="120" y="70" width="130" height="180" fill="#e0a96d"/>
+      <path d="M204 70 L250 70 L250 250 L204 250 Q214 170 204 70 Z" fill="#c4823f"/>
+      <path d="M156 118 Q166 104 184 102" fill="none" stroke="#f3cd9c" stroke-width="9"/>
+    </g>
+    <use xlink:href="#toast2" fill="#1d2433" stroke="#1d2433" stroke-width="28"/>
+    <g clip-path="url(#toast2-c)">
+      <rect x="240" y="100" width="110" height="150" fill="#e0a96d"/>
+      <path d="M304 100 L350 100 L350 250 L304 250 Q314 180 304 100 Z" fill="#c4823f"/>
+      <path d="M268 144 Q276 132 290 130" fill="none" stroke="#f3cd9c" stroke-width="9"/>
+    </g>
+    <!-- lever -->
+    <rect x="392" y="258" width="54" height="28" rx="13" fill="#333a48" stroke="#1d2433" stroke-width="14"/>
+    <!-- body -->
+    <use xlink:href="#body" fill="#1d2433" stroke="#1d2433" stroke-width="28"/>
+    <g clip-path="url(#body-c)">
+      <rect x="70" y="190" width="350" height="250" fill="#97a1b0"/>
+      <rect x="70" y="190" width="350" height="250" fill="#c0c7d1" clip-path="url(#body-lit)"/>
+      <!-- chrome shine -->
+      <path d="M118 262 L118 330" fill="none" stroke="#ffffff" stroke-width="14" opacity="0.65"/>
+      <path d="M142 240 L210 240" fill="none" stroke="#ffffff" stroke-width="10" opacity="0.65"/>
+      <circle cx="118" cy="356" r="7" fill="#ffffff" opacity="0.65"/>
+      <rect x="70" y="390" width="350" height="40" fill="#97a1b0"/>
+    </g>
+    <path d="M90 390 L398 390" fill="none" stroke="#1d2433" stroke-width="8.5"/>
+    <!-- dial -->
+    <circle cx="352" cy="352" r="13" fill="#e5484d" stroke="#1d2433" stroke-width="7"/>
+    <circle cx="348" cy="348" r="4" fill="#ffffff" opacity="0.7"/>
+    <!-- face -->
+    <ellipse cx="196" cy="300" rx="13" ry="17" fill="#1d2433"/>
+    <ellipse cx="292" cy="300" rx="13" ry="17" fill="#1d2433"/>
+    <circle cx="191" cy="294" r="5" fill="#ffffff"/>
+    <circle cx="287" cy="294" r="5" fill="#ffffff"/>
+    <path d="M224 328 Q244 350 264 328" fill="none" stroke="#1d2433" stroke-width="8.5"/>
+    <ellipse cx="166" cy="336" rx="16" ry="9" fill="#ff8fa3" opacity="0.6"/>
+    <ellipse cx="322" cy="336" rx="16" ry="9" fill="#ff8fa3" opacity="0.6"/>
+  </g>
+</svg>

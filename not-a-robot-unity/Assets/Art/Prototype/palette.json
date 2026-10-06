@@ -1,0 +1,31 @@
+{
+  "ui": {
+    "navy": "#0f1630",
+    "navy2": "#1b2547",
+    "panel": "#f7f9fc",
+    "line": "#d5dbe6",
+    "blue": "#2f6fe4",
+    "blueD": "#1f4fb0",
+    "green": "#22b573",
+    "red": "#e5484d",
+    "ink": "#1d2433",
+    "grey": "#7b8597",
+    "cat": "#f39a33",
+    "catD": "#c4661a",
+    "catL": "#ffd9a8",
+    "bot": "#9fb6cc",
+    "botD": "#5d7590",
+    "screen": "#14202f",
+    "cyan": "#5ff3ff",
+    "gold": "#ffc93c"
+  },
+  "tileBackgrounds": {
+    "sky": "#bfe1ff",
+    "grass": "#bde6a8",
+    "street": "#c3c8d2",
+    "water": "#9fd6ea",
+    "indoor": "#dbe5f0",
+    "night": "#2b3a63",
+    "sand": "#f3dd9b"
+  }
+}

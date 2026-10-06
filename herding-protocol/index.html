@@ -1,0 +1,916 @@
+<title>Herding Protocol</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  color-scheme: dark;
+  --bg:#0a1114; --frame:#13201f; --ink:#d9f0e8; --muted:#7fa39a; --accent:#f2c94c;
+  --btn:#1d2e2c; --btn-edge:#3c5a55;
+}
+html,body{height:100%;margin:0;padding:0;overflow:hidden;background:var(--bg);color:var(--ink);
+  font-family:"Chakra Petch","Trebuchet MS",ui-monospace,monospace;}
+#wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg);}
+canvas{display:block;background:var(--frame);image-rendering:auto;touch-action:none;max-width:100%;max-height:100%;}
+#touch{position:fixed;left:0;right:0;bottom:8px;display:none;justify-content:space-between;align-items:flex-end;
+  padding:0 12px;pointer-events:none;box-sizing:border-box;}
+#touch .pad{display:grid;grid-template-columns:repeat(3,52px);grid-template-rows:repeat(2,52px);gap:6px;pointer-events:auto;}
+#touch button{font:700 18px "Chakra Petch",monospace;color:var(--ink);background:var(--btn);border:2px solid var(--btn-edge);
+  border-radius:12px;opacity:.82;touch-action:none;user-select:none;-webkit-user-select:none;padding:0;}
+#touch button:active{background:var(--btn-edge);}
+#touch .wait{width:92px;height:62px;pointer-events:auto;}
+@media (pointer: coarse){ #touch{display:flex;} }
+</style>
+<div id="wrap"><canvas id="cv" width="960" height="540" aria-label="Herding Protocol game"></canvas></div>
+<div id="touch">
+  <div class="pad">
+    <span></span><button data-k="U" aria-label="up">&#9650;</button><span></span>
+    <button data-k="L" aria-label="left">&#9664;</button><button data-k="D" aria-label="down">&#9660;</button><button data-k="R" aria-label="right">&#9654;</button>
+  </div>
+  <button class="wait" data-k="W" aria-label="jump in place">JUMP<br><small>wait</small></button>
+</div>
+<script>
+"use strict";
+// ==CORE START==
+const DV = { U: [0, -1], D: [0, 1], L: [-1, 0], R: [1, 0], W: [0, 0] };
+const MAPS = {
+  id:   { U: [0, -1], D: [0, 1], L: [-1, 0], R: [1, 0] },
+  mirX: { U: [0, -1], D: [0, 1], L: [1, 0], R: [-1, 0] },
+  mirY: { U: [0, 1], D: [0, -1], L: [-1, 0], R: [1, 0] },
+  inv:  { U: [0, 1], D: [0, -1], L: [1, 0], R: [-1, 0] },
+  cw:   { U: [1, 0], D: [-1, 0], L: [0, -1], R: [0, 1] },
+  ccw:  { U: [-1, 0], D: [1, 0], L: [0, 1], R: [0, -1] }
+};
+const RULES = {
+  ECHO:   { name: "ECHO", map: MAPS.id, delay: 0, every: 1 },
+  MIRROR: { name: "MIRROR", map: MAPS.mirX, delay: 0, every: 1 },
+  LAG:    { name: "LAG", map: MAPS.id, delay: 2, every: 1 },
+  INVERT: { name: "INVERT", map: MAPS.inv, delay: 0, every: 1 },
+  SLEEPY: { name: "SLEEPY", map: MAPS.id, delay: 0, every: 2 }
+};
+const CONV = { ">": [1, 0], "<": [-1, 0], "^": [0, -1], "v": [0, 1] };
+
+function parseLevel(def) {
+  const rows = def.map, h = rows.length, w = Math.max(...rows.map(r => r.length));
+  const grid = [], robots = [], plates = [];
+  let cat = null, exit = null;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let ch = rows[y][x] || " ";
+    if (ch === "C") { cat = [x, y]; ch = "."; }
+    else if (ch === "E") { exit = [x, y]; }
+    else if (ch >= "a" && ch <= "e") {
+      const r = def.robots.find(q => q.color === ch.charCodeAt(0) - 97);
+      robots.push({ rule: typeof r.rule === "string" ? RULES[r.rule] : r.rule, color: r.color, x, y });
+      ch = ".";
+    } else if (ch >= "1" && ch <= "5") { plates.push({ x, y, c: +ch - 1 }); }
+    grid.push(ch);
+  }
+  return { w, h, grid, cat, exit, robots, plates, def };
+}
+function tileAt(L, x, y) { return x < 0 || y < 0 || x >= L.w || y >= L.h ? "#" : L.grid[y * L.w + x]; }
+function solidFor(ch) { return ch === "#" || ch === " "; }
+function initState(L) {
+  return { cx: L.cat[0], cy: L.cat[1], rs: L.robots.map(r => [r.x, r.y]), qs: L.robots.map(() => []), t: 0 };
+}
+function cloneState(s) { return { cx: s.cx, cy: s.cy, rs: s.rs.map(p => p.slice()), qs: s.qs.map(q => q.slice()), t: s.t }; }
+function robotIntent(rule, q, t, inp) {
+  // returns [effective input, vector] and mutates q
+  q.push(inp);
+  let eff = q.length > rule.delay ? q.shift() : "W";
+  if (t % rule.every !== 0) eff = "W";
+  return eff === "W" ? [0, 0] : rule.map[eff];
+}
+function resolveMoves(L, s, vecs, info, kind) {
+  const pend = new Set();
+  vecs.forEach((v, i) => { if (v && (v[0] || v[1]) && !info[i].fell) pend.add(i); });
+  let changed = true;
+  while (changed && pend.size) {
+    changed = false;
+    for (const i of [...pend]) {
+      const tx = s.rs[i][0] + vecs[i][0], ty = s.rs[i][1] + vecs[i][1];
+      if (solidFor(tileAt(L, tx, ty)) || (tx === s.cx && ty === s.cy)) { pend.delete(i); info[i].blocked = true; continue; }
+      const j = s.rs.findIndex((p, k) => k !== i && !info[k].fell && p[0] === tx && p[1] === ty);
+      if (j >= 0) { if (!pend.has(j)) { pend.delete(i); info[i].blocked = true; } continue; }
+      s.rs[i] = [tx, ty]; pend.delete(i); changed = true; info[i][kind] = true;
+      if (tileAt(L, tx, ty) === "O") info[i].fell = true;
+    }
+  }
+  for (const i of pend) info[i].blocked = true;
+}
+function step(L, s0, inp) {
+  const s = cloneState(s0);
+  const res = { s, catMoved: false, catBlocked: false, robots: s.rs.map(() => ({})), fail: false, win: false, restart: false };
+  const dv = DV[inp];
+  if (inp !== "W") {
+    const tx = s.cx + dv[0], ty = s.cy + dv[1], ch = tileAt(L, tx, ty);
+    if (solidFor(ch) || ch === "O" || s.rs.some(p => p[0] === tx && p[1] === ty)) res.catBlocked = true;
+    else { s.cx = tx; s.cy = ty; res.catMoved = true; }
+  }
+  const vecs = L.robots.map((r, i) => robotIntent(r.rule, s.qs[i], s.t, inp));
+  vecs.forEach((v, i) => { res.robots[i].v = v; });
+  resolveMoves(L, s, vecs, res.robots, "moved");
+  res.mid = s.rs.map(p => p.slice());
+  const pv = s.rs.map((p, i) => res.robots[i].fell ? null : CONV[tileAt(L, p[0], p[1])] || null);
+  resolveMoves(L, s, pv, res.robots, "pushed");
+  s.t++;
+  res.fail = res.robots.some(r => r.fell);
+  res.restart = tileAt(L, s.cx, s.cy) === "R";
+  res.win = !res.fail && !!L.exit && platesOk(L, s) && s.cx === L.exit[0] && s.cy === L.exit[1];
+  return res;
+}
+function platesOk(L, s) {
+  return L.robots.every((r, i) => L.plates.some(p => p.c === r.color && p.x === s.rs[i][0] && p.y === s.rs[i][1]));
+}
+function lcmEvery(L) {
+  let m = 1; const g = (a, b) => b ? g(b, a % b) : a;
+  for (const r of L.robots) m = m * r.rule.every / g(m, r.rule.every);
+  return m;
+}
+function stateKey(L, s, m) {
+  let k = String.fromCharCode(48 + s.cy * L.w + s.cx, 48 + s.t % m);
+  for (let i = 0; i < s.rs.length; i++) k += String.fromCharCode(48 + s.rs[i][1] * L.w + s.rs[i][0]) + s.qs[i].join("");
+  return k;
+}
+function solve(L, cap) {
+  cap = cap || 400000;
+  const m = lcmEvery(L), start = initState(L);
+  const seen = new Map([[stateKey(L, start, m), null]]);
+  let frontier = [start], nodes = 0;
+  while (frontier.length) {
+    const next = [];
+    for (const s of frontier) {
+      const k = stateKey(L, s, m);
+      for (const inp of "UDLRW") {
+        const r = step(L, s, inp);
+        if (r.fail || r.restart) continue;
+        const nk = stateKey(L, r.s, m);
+        if (seen.has(nk)) continue;
+        seen.set(nk, [k, inp]);
+        if (++nodes > cap) return { ok: false, nodes, capped: true };
+        if (r.win) {
+          let path = "", c = nk;
+          while (seen.get(c)) { const [pk, i] = seen.get(c); path = i + path; c = pk; }
+          return { ok: true, moves: path.length, path, nodes };
+        }
+        next.push(r.s);
+      }
+    }
+    frontier = next;
+  }
+  return { ok: false, nodes, capped: false };
+}
+// ==CORE END==
+const LEVELS = [
+ { name: "Shadow Shift", intro: "ECHO", robots: [{ rule: "ECHO", color: 0 }], map: [
+  "##########",
+  "#C..#....#",
+  "#...#..#E#",
+  "#.a....#.#",
+  "#R...#.1.#",
+  "##########"] },
+ { name: "Looking Glass", intro: "MIRROR", robots: [{ rule: "MIRROR", color: 1 }], map: [
+  "#############",
+  "#.....#.....#",
+  "#.#.......#.#",
+  "#.....C.....#",
+  "#..b..#..2..#",
+  "#R....#....E#",
+  "#############"] },
+ { name: "Contrarian", intro: "INVERT", robots: [{ rule: "INVERT", color: 3 }], map: [
+  "#############",
+  "#....C..#...#",
+  "#.......#.4.#",
+  "#.....>>>...#",
+  "#.......#...#",
+  "#R.d....#..E#",
+  "#############"] },
+ { name: "Late Shift", intro: "LAG", robots: [{ rule: "LAG", color: 2 }, { rule: "MIRROR", color: 1 }], map: [
+  "##############",
+  "#C.....O.....#",
+  "#..c...O..3..#",
+  "#......O.....#",
+  "#..........b.#",
+  "#R.....O.2..E#",
+  "##############"] },
+ { name: "Nap Time", intro: "SLEEPY", robots: [{ rule: "SLEEPY", color: 4 }, { rule: "ECHO", color: 0 }], map: [
+  "##############",
+  "#C...........#",
+  "#.e..#.vvv.5.#",
+  "#....#.......#",
+  "#.a..#...O1..#",
+  "#R...#......E#",
+  "##############"] },
+ { name: "Full Protocol", intro: "ALL", robots: [{ rule: "MIRROR", color: 1 }, { rule: "INVERT", color: 3 }, { rule: "SLEEPY", color: 4 }], map: [
+  "###########",
+  "#C..#.4...#",
+  "#.b...d...#",
+  "#..<<<..O.#",
+  "#.e.......#",
+  "#.E.5.2..R#",
+  "###########"] }
+];
+
+// ==PAR (verified by offline BFS)==
+const PAR = [13, 21, 22, 29, 22, 14];
+
+// ==LOBBY==
+const LOBBY = { name: "Factory Floor", robots: [{ rule: "ECHO", color: 0 }], map: [
+  "################",
+  "#..............#",
+  "#..S....A....H.#",
+  "#..............#",
+  "#......C.......#",
+  "#...a..........#",
+  "#..............#",
+  "################"] };
+const PADS = {
+  S: { label: "START", sub: "6 shifts", col: "#9be15d" },
+  A: { label: "AI ON", sub: "Foreman live", col: "#3fd0d4" },
+  H: { label: "AI SHIFT", sub: "new robot", col: "#ffd23f" }
+};
+
+// ==PALETTE==
+const COL = {
+  bg: "#0a1114", frame: "#13201f", floorA: "#1b2a2a", floorB: "#182625", grout: "#0f1a1a",
+  wallTop: "#3e5a57", wallFace: "#2a3f3d", wallEdge: "#557a75", hazard: "#f2c94c",
+  ink: "#d9f0e8", muted: "#7fa39a", red: "#ff4d4d", green: "#7dff9a",
+  robot: ["#3fd0d4", "#9be15d", "#ffd23f", "#ff6fae", "#6aa8ff"],
+  cat: "#ff9a4d", catDark: "#c9662a", catBelly: "#ffd9b0"
+};
+const RULE_INFO = {
+  ECHO: ["≡", "copies you exactly"],
+  MIRROR: ["⇄", "left/right swapped"],
+  LAG: ["◷", "copies you 2 moves late"],
+  INVERT: ["⇅", "does the opposite"],
+  SLEEPY: ["z", "moves every other input"]
+};
+
+// ==CANVAS==
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+const W = 960, H = 540;
+function fit() {
+  const s = Math.min(window.innerWidth / W, window.innerHeight / H);
+  cv.style.width = Math.floor(W * s) + "px"; cv.style.height = Math.floor(H * s) + "px";
+}
+window.addEventListener("resize", fit); fit();
+const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const FONT = '"Chakra Petch","Trebuchet MS",monospace';
+
+// ==AUDIO==
+let actx = null;
+function audioOn() {
+  if (actx) { if (actx.state === "suspended") actx.resume(); return; }
+  try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { actx = null; }
+}
+function tone(f, d, type, vol, slide, delay) {
+  if (!actx) return;
+  const t = actx.currentTime + (delay || 0), o = actx.createOscillator(), g = actx.createGain();
+  o.type = type || "square"; o.frequency.setValueAtTime(f, t);
+  if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, f * slide), t + d);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol || 0.06, t + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+  o.connect(g); g.connect(actx.destination); o.start(t); o.stop(t + d + 0.02);
+}
+const SFX = {
+  step: () => tone(520 + Math.random() * 60, 0.05, "triangle", 0.05),
+  robo: () => tone(180, 0.06, "square", 0.025, 1.4),
+  bump: () => tone(110, 0.09, "sawtooth", 0.05, 0.6),
+  wait: () => { tone(330, 0.06, "triangle", 0.05, 1.6); },
+  plate: () => { tone(660, 0.08, "triangle", 0.06); tone(990, 0.12, "triangle", 0.05, 1, 0.07); },
+  fail: () => { tone(300, 0.5, "sawtooth", 0.07, 0.2); tone(150, 0.4, "square", 0.04, 0.5, 0.1); },
+  win: () => [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.18, "triangle", 0.07, 1, i * 0.09)),
+  pad: () => { tone(240, 0.2, "triangle", 0.06, 3); },
+  reset: () => tone(500, 0.25, "square", 0.04, 0.3)
+};
+
+// ==LIVE AI==
+let sample = null;
+(async () => {
+  try { if (window.claude && window.claude.use) sample = await window.claude.use("sample"); } catch (e) { sample = null; }
+})();
+let aiBusy = false, aiDisabled = false, aiOn = false;
+const AI_OFF_CODES = ["not_granted", "sampling_disabled", "not_declared", "capability_disabled", "capability_removed"];
+async function askAI(prompt, fallback) {
+  if (!sample || aiDisabled || aiBusy) return fallback();
+  aiBusy = true;
+  try {
+    const { text } = await sample(prompt, { modelTier: "quick", cache: false });
+    return (text || "").trim() || fallback();
+  } catch (e) {
+    if (AI_OFF_CODES.includes(e && e.code)) aiDisabled = true;
+    return fallback();
+  } finally { aiBusy = false; }
+}
+async function askAIJson(prompt) {
+  if (!sample || !sample.json || aiDisabled || aiBusy) return null;
+  aiBusy = true;
+  try { return await sample.json(prompt, { modelTier: "quick", cache: false }); }
+  catch (e) { if (AI_OFF_CODES.includes(e && e.code)) aiDisabled = true; return null; }
+  finally { aiBusy = false; }
+}
+function aiLive() { return !!(sample && aiOn && !aiDisabled); }
+function cleanLine(t) {
+  t = String(t || "").split("\n").map(x => x.trim()).filter(Boolean)[0] || "";
+  t = t.replace(/^["'“”]+|["'“”]+$/g, "").replace(/^(foreman|factory foreman)\s*:\s*/i, "").trim();
+  if (t.length > 90) { t = t.slice(0, 89); t = t.slice(0, Math.max(40, t.lastIndexOf(" "))) + "…"; }
+  return t;
+}
+const pick = a => a[Math.floor(Math.random() * a.length)];
+const LINES = {
+  greet: [
+    "Fine. You're the cat. Don't shed on the servos.",
+    "AI link up. Great. Now I can be disappointed in real time.",
+    "Foreman online. Productivity expected. Fur not.",
+  ],
+  start: [
+    "Plates lit, door open, cat out. Simple. Even for a mammal.",
+    "These bots copy you. Try being worth copying.",
+    "Shift starts now. Par is {p}. I'm counting. I'm always counting.",
+    "Every bot on its plate, same tick. Not 'mostly'. ALL.",
+    "Walls are your friends. Unlike me.",
+    "Don't drop my robots in the pits. They're on lease.",
+    "Par {p}. My last cat needed triple. It's a planter now.",
+    "Remember: jumping in place still counts as a move.",
+    "The red pad resets the floor. Pride resets itself.",
+    "Conveyors push robots. Not cats. Cats push luck.",
+    "Line them up. Colors match. It's not paw-sitive thinking, it's protocol.",
+    "I designed this floor in my sleep mode. Solve it awake.",
+    "Herd. Don't hurt. Robots have feelings. Expensive ones.",
+    "Bump them into walls. That's literally the method.",
+    "One cat. Many bots. Zero excuses.",
+    "Tick, tock. Each step you take, they take. Twisted."
+  ],
+  intro: {
+    ECHO: "ECHO copies you exactly. Use walls to shift where it ends up.",
+    MIRROR: "MIRROR swaps left and right. Up is still up. Mostly.",
+    INVERT: "INVERT does the opposite. And conveyors shove it around. Have fun.",
+    LAG: "LAG runs 2 moves behind. Its ghost arrows show what's queued.",
+    SLEEPY: "SLEEPY naps every other input. Jump in place to nudge its timing.",
+    ALL: "Final shift: three twisted copies at once. Breathe. Then don't."
+  },
+  under: [
+    "{m} moves? Under par {p}? ...Recalibrating my contempt.",
+    "Beat par by {d}. Suspicious. I'll audit your paws.",
+    "{m} under a par of {p}. Fine. FINE. Take a treat.",
+    "Under par. I'm updating the manual. Grudgingly."
+  ],
+  par: [
+    "Exactly par, {m}. Textbook. Boring, but textbook.",
+    "{m} moves. Par. You're officially adequate.",
+    "On par. The factory hums. I do not.",
+    "Par {p}, done in {p}. Precise little furball."
+  ],
+  over: [
+    "{m} moves for a par-{p} floor. My conveyor sighed.",
+    "{d} over par. The robots are filing complaints.",
+    "Cleared. Eventually. {m} moves, cat. {m}.",
+    "Done in {m}. Par was {p}. I'll pretend I didn't see.",
+    "Over par by {d}. Close enough for a cat, I guess."
+  ],
+  fail: [
+    "That robot was on lease! Floor reset.",
+    "Pit claims another. Resetting. Again.",
+    "Gravity: 1. Cat: 0. Try again.",
+    "I heard that crunch. Reset.",
+    "Robots don't float. Write it on your paw."
+  ],
+  reset: ["Red pad. Fresh start. Same cat.", "Reset. The floor forgets. I don't.", "Rewinding the shift. Try thinking first."],
+  done: ["All six shifts done. Go nap on a warm server. You earned it.", "Factory herded. I'll admit nothing, but... good cat."]
+};
+function fill(t, v) { return t.replace(/\{(\w)\}/g, (_, k) => v[k] !== undefined ? v[k] : ""); }
+
+// ==FOREMAN SPEECH==
+let speech = { text: "Walk onto a pad. Robots copy you. That's the job.", t0: 0, src: "script" }, speechToken = 0;
+function say(text, src) { speech = { text, t0: performance.now(), src: src || "script" }; }
+function sayAI(prompt, fallbackText) {
+  const tok = ++speechToken;
+  say(fallbackText, "script");
+  if (!aiLive()) return;
+  askAI(prompt, () => null).then(t => {
+    const line = t && cleanLine(t);
+    if (line && tok === speechToken) say(line, "ai");
+  });
+}
+
+// ==AI SHIFT RULE==
+function validateRule(o) {
+  try {
+    if (o && typeof o === "object" && o.data !== undefined && !o.dx_map) o = o.data;
+    if (o && typeof o === "object" && typeof o.text === "string" && !o.dx_map) o = o.text;
+    if (typeof o === "string") { const m = o.match(/\{[\s\S]*\}/); o = m ? JSON.parse(m[0]) : null; }
+    if (!o || typeof o !== "object" || !o.dx_map || typeof o.dx_map !== "object") return null;
+    const map = {}, keys = { up: "U", down: "D", left: "L", right: "R" };
+    let nonzero = 0;
+    for (const k in keys) {
+      const v = o.dx_map[k];
+      if (!Array.isArray(v) || v.length !== 2 || !v.every(n => typeof n === "number" && isFinite(n))) return null;
+      let dx = Math.max(-1, Math.min(1, Math.round(v[0]))), dy = Math.max(-1, Math.min(1, Math.round(v[1])));
+      if (dx && dy) dy = 0;
+      if (dx || dy) nonzero++;
+      map[keys[k]] = [dx, dy];
+    }
+    if (nonzero < 2) return null;
+    const every = Math.max(1, Math.min(3, Math.round(+o.every || 1))), delay = Math.max(0, Math.min(3, Math.round(+o.delay || 0)));
+    let name = String(o.name || "PROTO").toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 8) || "PROTO";
+    return { name, map, every, delay, custom: true };
+  } catch (e) { return null; }
+}
+function randomRule() {
+  const opts = [["ECHO", "id"], ["MIRROR", "mirX"], ["FLIP", "mirY"], ["INVERT", "inv"], ["TURN", "cw"], ["SPIN", "ccw"]];
+  const [nm, mk] = pick(opts.slice(1));
+  const delay = pick([0, 0, 1, 2]), every = pick([1, 1, 2]);
+  const name = (nm + (delay ? "-LAG" : every > 1 ? "-NAP" : "")).slice(0, 10);
+  return { name, map: MAPS[mk], every, delay, custom: true };
+}
+function describeRule(r) {
+  const ar = v => v[0] > 0 ? "→" : v[0] < 0 ? "←" : v[1] > 0 ? "↓" : v[1] < 0 ? "↑" : "·";
+  let s = "↑" + ar(r.map.U) + " ↓" + ar(r.map.D) + " ←" + ar(r.map.L) + " →" + ar(r.map.R);
+  if (r.delay) s += " · " + r.delay + " late";
+  if (r.every > 1) s += " · every " + r.every;
+  return s;
+}
+function genLevel(rule) {
+  const w = 11, h = 7;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const g = [];
+    for (let y = 0; y < h; y++) { let row = ""; for (let x = 0; x < w; x++) row += (x === 0 || y === 0 || x === w - 1 || y === h - 1) ? "#" : "."; g.push(row.split("")); }
+    const free = () => { for (let k = 0; k < 200; k++) { const x = 1 + Math.floor(Math.random() * (w - 2)), y = 1 + Math.floor(Math.random() * (h - 2)); if (g[y][x] === ".") return [x, y]; } return null; };
+    const nWalls = 5 + Math.floor(Math.random() * 5);
+    for (let i = 0; i < nWalls; i++) { const p = free(); if (p) g[p[1]][p[0]] = "#"; }
+    if (Math.random() < 0.6) { const p = free(); if (p) g[p[1]][p[0]] = "O"; }
+    if (Math.random() < 0.6) { const p = free(), c = pick([">", "<", "^", "v"]); if (p) g[p[1]][p[0]] = c; }
+    const rp = free(); if (rp) g[rp[1]][rp[0]] = "R";
+    const cp = free(); if (!cp) continue; g[cp[1]][cp[0]] = "C";
+    const ap = free(); if (!ap) continue; g[ap[1]][ap[0]] = "a";
+    const ep = free(); if (!ep) continue; g[ep[1]][ep[0]] = "c";
+    const def = { name: "Shift: " + rule.name, intro: "CUSTOM", robots: [{ rule: "ECHO", color: 0 }, { rule, color: 2 }], map: g.map(r => r.join("")) };
+    const L = parseLevel(def);
+    let s = initState(L), seq = "";
+    for (let k = 0; k < 120 && seq.length < 18; k++) {
+      const inp = (seq && Math.random() < 0.55) ? seq[seq.length - 1] : "UDLRW"[Math.floor(Math.random() * 5)];
+      const r = step(L, s, inp);
+      if (r.fail || r.restart) continue;
+      s = r.s; seq += inp;
+    }
+    const marks = [[s.rs[0], "1"], [s.rs[1], "3"], [[s.cx, s.cy], "E"]];
+    const keys = new Set(marks.map(m => m[0].join(",")));
+    if (keys.size < 3 || marks.some(m => g[m[0][1]][m[0][0]] !== ".")) continue;
+    marks.forEach(m => { g[m[0][1]][m[0][0]] = m[1]; });
+    def.map = g.map(r => r.join(""));
+    const res = solve(parseLevel(def), 45000);
+    if (res.ok && res.moves >= 6) return { def, par: res.moves, path: res.path };
+  }
+  return null;
+}
+async function aiShiftPad() {
+  if (shiftBusy) return;
+  shiftBusy = true;
+  say("Drafting a new robot blueprint…", "script");
+  let rule = null, fromAI = false;
+  if (aiLive()) {
+    const raw = await askAIJson('Invent a new copy-rule for a factory robot in a grid puzzle where robots copy a cat\'s moves with a twist. Return JSON only: {"name": SHORT UPPERCASE NAME (max 8 letters), "dx_map": {"up":[dx,dy],"down":[dx,dy],"left":[dx,dy],"right":[dx,dy]}, "every": n (1-3, moves only every n-th input), "delay": k (0-3, inputs late)}. dx,dy are -1, 0 or 1; y grows downward. Be creative.');
+    rule = validateRule(raw); fromAI = !!rule;
+  }
+  if (!rule) rule = randomRule();
+  let tries = 0;
+  const attempt = () => {
+    const out = genLevel(rule);
+    if (out) {
+      shiftBusy = false;
+      if (world.kind !== "lobby") return;
+      startLevel({ def: out.def, par: out.par, idx: -1, rule, fromAI });
+    } else if (++tries < 6) setTimeout(attempt, 30);
+    else { shiftBusy = false; say("Blueprint jammed the solver. Step on AI SHIFT again.", "script"); }
+  };
+  setTimeout(attempt, 30);
+}
+let shiftBusy = false;
+
+// ==WORLD STATE==
+let world = null, mode = "lobby", anim = null, queue = [], afterAnim = null, banner = null;
+let particles = [], shake = 0, flash = 0, wonAt = 0, failAt = 0, fallen = -1;
+let catFace = 1, catSquash = 0, lastInputT = 0, levelIdx = 0;
+const best = (() => { try { return JSON.parse(localStorage.getItem("herding-protocol-best") || "{}") || {}; } catch (e) { return {}; } })();
+function saveBest() { try { localStorage.setItem("herding-protocol-best", JSON.stringify(best)); } catch (e) { /* ignore */ } }
+
+function makeWorld(def, kind, extra) {
+  const L = parseLevel(def);
+  return Object.assign({ def, L, s: initState(L), kind, moves: 0, lit: L.robots.map(() => false) }, extra || {});
+}
+function layout(L) {
+  const top = 58, bot = 112;
+  const T = Math.floor(Math.min(56, 900 / L.w, (H - top - bot) / L.h));
+  return { T, ox: Math.floor((W - L.w * T) / 2), oy: top + Math.floor((H - top - bot - L.h * T) / 2) };
+}
+function goLobby(msg) {
+  world = makeWorld(LOBBY, "lobby"); mode = "lobby"; anim = null; queue = []; fallen = -1;
+  speechToken++;
+  say(msg || "Walk onto a pad. Robots copy you. That's the job.", "script");
+}
+function startLevel(opt) {
+  world = makeWorld(opt.def, "level", { par: opt.par, idx: opt.idx, rule: opt.rule, fromAI: opt.fromAI });
+  mode = "play"; anim = null; queue = []; fallen = -1;
+  banner = { t0: performance.now(), title: opt.idx >= 0 ? "SHIFT " + (opt.idx + 1) + " · " + opt.def.name.toUpperCase() : "AI SHIFT · " + opt.rule.name, sub: "PAR " + opt.par };
+  const types = [...new Set(world.L.robots.map(r => r.rule.name))].join(", ");
+  let fb = opt.idx >= 0 ? (LINES.intro[opt.def.intro] || fill(pick(LINES.start), { p: opt.par })) : (opt.fromAI ? "Fresh blueprint: " : "Spare-parts bot: ") + opt.rule.name + ". " + describeRule(opt.rule);
+  sayAI(`You are the Factory Foreman, a grumpy robot overseer. A cat must herd copy-robots (${types}) onto matching plates. Level "${opt.def.name}", par ${opt.par} moves. Give ONE short grumpy line (max 90 chars) to the cat. Line only.`, fb);
+}
+function restartLevel(msg) {
+  const w = world;
+  world = makeWorld(w.def, w.kind, { par: w.par, idx: w.idx, rule: w.rule, fromAI: w.fromAI });
+  mode = "play"; anim = null; queue = []; fallen = -1; flash = 1;
+  speechToken++;
+  if (msg) say(msg, "script");
+  SFX.reset();
+}
+
+// ==INPUT==
+const KEYMAP = { ArrowUp: "U", KeyW: "U", ArrowDown: "D", KeyS: "D", ArrowLeft: "L", KeyA: "L", ArrowRight: "R", KeyD: "R", Space: "W" };
+window.addEventListener("keydown", e => {
+  const k = KEYMAP[e.code];
+  if (!k) return;
+  e.preventDefault();
+  audioOn();
+  if (e.repeat && performance.now() - lastInputT < 140) return;
+  input(k);
+});
+document.querySelectorAll("#touch button").forEach(b => b.addEventListener("pointerdown", e => {
+  e.preventDefault(); audioOn(); input(b.dataset.k);
+}));
+function input(k) {
+  lastInputT = performance.now();
+  if (mode === "won") { if (performance.now() - wonAt > 900) advance(); return; }
+  if (mode === "falling") return;
+  if (queue.length < 2) queue.push(k);
+}
+function advance() {
+  if (mode !== "won") return;
+  if (world.idx >= 0 && world.idx < LEVELS.length - 1) { levelIdx = world.idx + 1; startLevel({ def: LEVELS[levelIdx], par: PAR[levelIdx], idx: levelIdx }); }
+  else if (world.idx === LEVELS.length - 1) goLobby(pick(LINES.done));
+  else goLobby("Prototype shift logged. Step on AI SHIFT for another blueprint.");
+}
+
+// ==TURN LOGIC==
+function doMove(k) {
+  const prev = world.s, r = step(world.L, prev, k);
+  world.s = r.s; world.moves++;
+  if (DV[k][0]) catFace = DV[k][0];
+  catSquash = 1;
+  const pushed = r.robots.some(x => x.pushed);
+  anim = { t0: performance.now(), dur: pushed ? 190 : 120, prev, r, k };
+  if (k === "W") SFX.wait(); else if (r.catBlocked) SFX.bump(); else SFX.step();
+  if (r.robots.some(x => x.moved || x.pushed)) SFX.robo();
+  if (r.robots.some(x => x.blocked && !x.moved)) setTimeout(SFX.bump, 40);
+  if (k === "W") puff(world.s.cx, world.s.cy, "#a9c9c0", 6);
+  const lit = world.L.robots.map((rb, i) => world.L.plates.some(p => p.c === rb.color && p.x === r.s.rs[i][0] && p.y === r.s.rs[i][1]));
+  if (lit.some((v, i) => v && !world.lit[i])) setTimeout(SFX.plate, 90);
+  world.lit = lit;
+  if (world.kind === "lobby") {
+    const ch = tileAt(world.L, r.s.cx, r.s.cy);
+    if (PADS[ch] && !r.catBlocked && k !== "W") afterAnim = () => lobbyPad(ch);
+    return;
+  }
+  if (r.fail) {
+    fallen = r.robots.findIndex(x => x.fell); mode = "falling"; failAt = performance.now();
+    shake = reduceMotion ? 2 : 10; SFX.fail(); speechToken++; say(pick(LINES.fail), "script");
+    setTimeout(() => restartLevel(), 900);
+  } else if (r.restart) {
+    afterAnim = () => restartLevel(pick(LINES.reset));
+  } else if (r.win) {
+    mode = "won"; wonAt = performance.now();
+    afterAnim = () => winFx();
+  }
+}
+function winFx() {
+  SFX.win(); shake = reduceMotion ? 1 : 4;
+  const L = world.L;
+  L.robots.forEach((rb, i) => puff(world.s.rs[i][0], world.s.rs[i][1], COL.robot[rb.color], 18));
+  puff(world.s.cx, world.s.cy, COL.cat, 24);
+  const m = world.moves, p = world.par, d = Math.abs(m - p);
+  const pool = m < p ? LINES.under : m === p ? LINES.par : LINES.over;
+  const key = world.idx >= 0 ? "L" + world.idx : null;
+  if (key && (!best[key] || m < best[key])) { best[key] = m; saveBest(); }
+  sayAI(`You are the Factory Foreman, a grumpy robot overseer. The cat cleared "${world.def.name}" in ${m} moves; par is ${p}. Give ONE short grumpy quip (max 90 chars) about that. Line only.`, fill(pick(pool), { m, p, d }));
+  setTimeout(() => { if (mode === "won" && performance.now() - lastInputT > 1500) advance(); }, 3800);
+}
+function lobbyPad(ch) {
+  SFX.pad(); puff(world.s.cx, world.s.cy, PADS[ch].col, 16);
+  if (ch === "S") { levelIdx = 0; startLevel({ def: LEVELS[0], par: PAR[0], idx: 0 }); }
+  else if (ch === "A") {
+    if (aiOn && !aiDisabled) { say("I'm already on. Unfortunately for both of us.", "script"); return; }
+    aiOn = true;
+    if (!sample) { say("No AI link out here. Scripted Foreman it is.", "script"); return; }
+    aiDisabled = false;
+    sayAI("You are the Factory Foreman, a grumpy robot overseer in a robot factory. A cat just switched you on. Greet it in ONE short grumpy line (max 90 chars). Line only.", pick(LINES.greet));
+  } else if (ch === "H") aiShiftPad();
+}
+
+// ==PARTICLES==
+function puff(gx, gy, col, n) {
+  const { T, ox, oy } = layout(world.L);
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, v = 40 + Math.random() * 140;
+    particles.push({ x: ox + (gx + 0.5) * T, y: oy + (gy + 0.5) * T, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 40, life: 0.6 + Math.random() * 0.5, t: 0, col, s: 2 + Math.random() * 3 });
+  }
+}
+
+// ==RENDER: TILES==
+function rr(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y, w, h, r) : ctx.rect(x, y, w, h); }
+function drawTiles(now) {
+  const L = world.L, { T, ox, oy } = layout(L);
+  const open = L.exit && platesOk(L, world.s);
+  for (let y = 0; y < L.h; y++) for (let x = 0; x < L.w; x++) {
+    const ch = L.grid[y * L.w + x], px = ox + x * T, py = oy + y * T;
+    if (ch === " ") continue;
+    if (ch === "#") continue;
+    ctx.fillStyle = (x + y) % 2 ? COL.floorA : COL.floorB; ctx.fillRect(px, py, T, T);
+    ctx.strokeStyle = COL.grout; ctx.lineWidth = 1; ctx.strokeRect(px + 0.5, py + 0.5, T - 1, T - 1);
+    ctx.fillStyle = "#26393a"; [[4, 4], [T - 6, 4], [4, T - 6], [T - 6, T - 6]].forEach(([a, b]) => ctx.fillRect(px + a, py + b, 2, 2));
+    if (ch === "O") {
+      ctx.fillStyle = COL.hazard; ctx.fillRect(px + 2, py + 2, T - 4, T - 4);
+      ctx.save(); ctx.beginPath(); ctx.rect(px + 2, py + 2, T - 4, T - 4); ctx.clip();
+      ctx.fillStyle = "#14100a";
+      for (let i = -T; i < T * 2; i += 10) { ctx.beginPath(); ctx.moveTo(px + i, py); ctx.lineTo(px + i + 5, py); ctx.lineTo(px + i + 5 - T, py + T); ctx.lineTo(px + i - T, py + T); ctx.fill(); }
+      ctx.restore();
+      const g = ctx.createRadialGradient(px + T / 2, py + T / 2, 2, px + T / 2, py + T / 2, T * 0.42);
+      g.addColorStop(0, "#000"); g.addColorStop(1, "#070b0c");
+      ctx.fillStyle = g; ctx.fillRect(px + 7, py + 7, T - 14, T - 14);
+    } else if (CONV[ch]) {
+      const [dx, dy] = CONV[ch];
+      ctx.fillStyle = "#2b3434"; ctx.fillRect(px + 3, py + 3, T - 6, T - 6);
+      ctx.save(); ctx.beginPath(); ctx.rect(px + 3, py + 3, T - 6, T - 6); ctx.clip();
+      ctx.translate(px + T / 2, py + T / 2); ctx.rotate(Math.atan2(dy, dx));
+      ctx.strokeStyle = "#8fb3ad"; ctx.lineWidth = 3;
+      const off = (now / 25) % (T / 3);
+      for (let i = -2; i <= 2; i++) { const cx0 = i * T / 3 + off - T / 6; ctx.beginPath(); ctx.moveTo(cx0 - 5, -8); ctx.lineTo(cx0 + 3, 0); ctx.lineTo(cx0 - 5, 8); ctx.stroke(); }
+      ctx.restore();
+    } else if (ch >= "1" && ch <= "5") {
+      const c = COL.robot[+ch - 1], on = world.L.robots.some((r, i) => r.color === +ch - 1 && world.s.rs[i][0] === x && world.s.rs[i][1] === y);
+      ctx.save(); if (on) { ctx.shadowColor = c; ctx.shadowBlur = 18; }
+      ctx.strokeStyle = c; ctx.lineWidth = 3; rr(px + 6, py + 6, T - 12, T - 12, 6); ctx.stroke();
+      ctx.globalAlpha = on ? 0.55 : 0.18 + 0.06 * Math.sin(now / 300); ctx.fillStyle = c; rr(px + 9, py + 9, T - 18, T - 18, 4); ctx.fill();
+      ctx.restore();
+    } else if (ch === "E") {
+      ctx.fillStyle = "#0d1514"; rr(px + 5, py + 4, T - 10, T - 8, 5); ctx.fill();
+      ctx.strokeStyle = open ? COL.green : "#516d69"; ctx.lineWidth = 3; ctx.stroke();
+      const gap = open ? (T - 16) * 0.4 : 0;
+      ctx.fillStyle = "#3a504d"; ctx.fillRect(px + 8, py + 7, (T - 16) / 2 - gap, T - 14); ctx.fillRect(px + T / 2 + gap, py + 7, (T - 16) / 2 - gap, T - 14);
+      ctx.fillStyle = open ? COL.green : COL.red; ctx.beginPath(); ctx.arc(px + T / 2, py + 9, 3, 0, 7); ctx.fill();
+      ctx.fillStyle = open ? COL.green : COL.muted; ctx.font = `700 ${Math.max(9, T * 0.2)}px ${FONT}`; ctx.textAlign = "center";
+      ctx.fillText(open ? "EXIT" : "LOCK", px + T / 2, py + T * 0.62);
+    } else if (ch === "R") {
+      ctx.fillStyle = "#3a1416"; ctx.beginPath(); ctx.arc(px + T / 2, py + T / 2, T * 0.38, 0, 7); ctx.fill();
+      ctx.strokeStyle = COL.red; ctx.lineWidth = 3; ctx.stroke();
+      ctx.fillStyle = COL.red; ctx.font = `700 ${Math.max(8, T * 0.17)}px ${FONT}`; ctx.textAlign = "center"; ctx.fillText("RESET", px + T / 2, py + T / 2 + T * 0.06);
+    } else if (PADS[ch]) {
+      const pd = PADS[ch], act = ch === "A" && aiLive();
+      ctx.save(); ctx.shadowColor = pd.col; ctx.shadowBlur = 10 + 6 * Math.sin(now / 250);
+      ctx.fillStyle = "#0f1b1a"; rr(px + 3, py + 3, T - 6, T - 6, 8); ctx.fill();
+      ctx.strokeStyle = pd.col; ctx.lineWidth = 3; ctx.stroke(); ctx.restore();
+      ctx.fillStyle = pd.col; ctx.globalAlpha = act ? 0.6 : 0.25; rr(px + 9, py + 9, T - 18, T - 18, 5); ctx.fill(); ctx.globalAlpha = 1;
+      ctx.font = `700 15px ${FONT}`; ctx.textAlign = "center"; ctx.fillStyle = pd.col;
+      ctx.fillText(ch === "A" && aiLive() ? "AI: LIVE" : ch === "H" && shiftBusy ? "DRAFTING…" : pd.label, px + T / 2, py - 8);
+      ctx.font = `500 11px ${FONT}`; ctx.fillStyle = COL.muted; ctx.fillText(pd.sub, px + T / 2, py + T + 13);
+    }
+  }
+  // walls drawn after floor so their faces overlap
+  for (let y = 0; y < L.h; y++) for (let x = 0; x < L.w; x++) {
+    if (L.grid[y * L.w + x] !== "#") continue;
+    const px = ox + x * T, py = oy + y * T, below = tileAt(L, x, y + 1);
+    ctx.fillStyle = COL.wallTop; ctx.fillRect(px, py - 6, T, T);
+    ctx.fillStyle = COL.wallEdge; ctx.fillRect(px, py - 6, T, 2);
+    if (below !== "#" && below !== " ") {
+      ctx.fillStyle = COL.wallFace; ctx.fillRect(px, py + T - 6, T, 6);
+      ctx.fillStyle = COL.hazard; for (let i = 0; i < T; i += 8) ctx.fillRect(px + i, py + T - 4, 4, 2);
+    }
+  }
+}
+
+// ==RENDER: ACTORS==
+function ease(p) { return p < 0 ? 0 : p > 1 ? 1 : 1 - Math.pow(1 - p, 3); }
+function actorPos(now) {
+  const s = world.s, n = s.rs.length;
+  let cat = [s.cx, s.cy], rs = s.rs.map(p => p.slice()), bumps = { cat: [0, 0], rs: s.rs.map(() => [0, 0]) };
+  if (anim) {
+    const p = Math.min(1, (now - anim.t0) / anim.dur), r = anim.r, pr = anim.prev;
+    const twoPhase = r.robots.some(x => x.pushed);
+    const e = ease(p);
+    cat = [pr.cx + (s.cx - pr.cx) * (twoPhase ? ease(p * 1.6) : e), pr.cy + (s.cy - pr.cy) * (twoPhase ? ease(p * 1.6) : e)];
+    for (let i = 0; i < n; i++) {
+      const a = pr.rs[i], m = r.mid[i], b = s.rs[i];
+      if (twoPhase) {
+        const p1 = ease(p * 2), p2 = ease(p * 2 - 1);
+        rs[i] = [a[0] + (m[0] - a[0]) * p1 + (b[0] - m[0]) * p2, a[1] + (m[1] - a[1]) * p1 + (b[1] - m[1]) * p2];
+      } else rs[i] = [a[0] + (b[0] - a[0]) * e, a[1] + (b[1] - a[1]) * e];
+      const inf = r.robots[i];
+      if (inf.blocked && !inf.moved && inf.v) { const k = Math.sin(p * Math.PI) * 0.14; bumps.rs[i] = [inf.v[0] * k, inf.v[1] * k]; }
+    }
+    if (r.catBlocked) { const k = Math.sin(p * Math.PI) * 0.14; bumps.cat = [DV[anim.k][0] * k, DV[anim.k][1] * k]; }
+    if (anim.k === "W") bumps.cat = [0, -Math.sin(p * Math.PI) * 0.35];
+  }
+  return { cat, rs, bumps };
+}
+function drawCat(x, y, T, now, hop) {
+  const s = T / 48, sq = catSquash * 0.18;
+  ctx.save(); ctx.translate(x, y);
+  ctx.fillStyle = "rgba(0,0,0,.35)"; ctx.beginPath(); ctx.ellipse(0, 14 * s, 15 * s * (1 - hop * 0.6), 5 * s, 0, 0, 7); ctx.fill();
+  ctx.translate(0, -hop * T * 0.9);
+  ctx.scale(catFace * (1 + sq), 1 - sq);
+  const sw = Math.sin(now / 260) * 0.5;
+  ctx.strokeStyle = COL.catDark; ctx.lineWidth = 5 * s; ctx.lineCap = "round";
+  ctx.beginPath(); ctx.moveTo(-10 * s, 8 * s); ctx.quadraticCurveTo(-24 * s, 4 * s, -20 * s + sw * 6 * s, -10 * s); ctx.stroke();
+  ctx.fillStyle = COL.cat; ctx.beginPath(); ctx.ellipse(-2 * s, 6 * s, 13 * s, 10 * s, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = COL.catBelly; ctx.beginPath(); ctx.ellipse(1 * s, 9 * s, 7 * s, 6 * s, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = COL.cat;
+  ctx.beginPath(); ctx.moveTo(-1 * s, -16 * s); ctx.lineTo(2 * s, -27 * s); ctx.lineTo(8 * s, -18 * s); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(10 * s, -18 * s); ctx.lineTo(17 * s, -26 * s); ctx.lineTo(18 * s, -14 * s); ctx.fill();
+  ctx.beginPath(); ctx.arc(8 * s, -9 * s, 12 * s, 0, 7); ctx.fill();
+  ctx.fillStyle = COL.catDark;
+  ctx.fillRect(4 * s, -21 * s, 2 * s, 5 * s); ctx.fillRect(9 * s, -21 * s, 2 * s, 6 * s); ctx.fillRect(-12 * s, 0, 3 * s, 8 * s); ctx.fillRect(-6 * s, -2 * s, 3 * s, 9 * s);
+  ctx.fillStyle = "#ffc2c2"; ctx.beginPath(); ctx.moveTo(3 * s, -23 * s); ctx.lineTo(4 * s, -18 * s); ctx.lineTo(7 * s, -18 * s); ctx.fill();
+  const blink = (now % 3200) < 120;
+  ctx.fillStyle = "#1b2420";
+  if (blink) { ctx.fillRect(3 * s, -10 * s, 5 * s, 1.5 * s); ctx.fillRect(12 * s, -10 * s, 5 * s, 1.5 * s); }
+  else {
+    ctx.beginPath(); ctx.ellipse(5.5 * s, -10 * s, 2.5 * s, 3.5 * s, 0, 0, 7); ctx.ellipse(14.5 * s, -10 * s, 2.5 * s, 3.5 * s, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = "#fff"; ctx.fillRect(6 * s, -12 * s, 1.5 * s, 1.5 * s); ctx.fillRect(15 * s, -12 * s, 1.5 * s, 1.5 * s);
+  }
+  ctx.fillStyle = "#ff7d8f"; ctx.beginPath(); ctx.moveTo(9 * s, -6 * s); ctx.lineTo(11 * s, -6 * s); ctx.lineTo(10 * s, -4.5 * s); ctx.fill();
+  ctx.strokeStyle = "rgba(255,240,220,.7)"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(14 * s, -5 * s); ctx.lineTo(23 * s, -7 * s); ctx.moveTo(14 * s, -4 * s); ctx.lineTo(23 * s, -3 * s); ctx.stroke();
+  ctx.restore();
+}
+const ARW = { U: "↑", D: "↓", L: "←", R: "→", W: "·" };
+function drawRobot(i, x, y, T, now, fallP) {
+  const rb = world.L.robots[i], rule = rb.rule, col = COL.robot[rb.color], s = T / 48;
+  const sleeping = rule.every > 1 && world.s.t % rule.every !== 0;
+  ctx.save(); ctx.translate(x, y);
+  if (fallP > 0) { ctx.rotate(fallP * 4); ctx.scale(1 - fallP, 1 - fallP); ctx.globalAlpha = 1 - fallP * 0.6; }
+  ctx.fillStyle = "rgba(0,0,0,.35)"; ctx.beginPath(); ctx.ellipse(0, 15 * s, 15 * s, 4 * s, 0, 0, 7); ctx.fill();
+  const bob = sleeping ? 0 : Math.sin(now / 180 + i) * 1.2 * s;
+  ctx.translate(0, bob);
+  ctx.fillStyle = "#1c2526"; rr(-15 * s, 8 * s, 30 * s, 8 * s, 3 * s); ctx.fill();
+  ctx.fillStyle = "#3b4a4b"; for (let k = -12; k <= 10; k += 5) ctx.fillRect((k + (now / 60 % 5)) * s, 10 * s, 2 * s, 4 * s);
+  ctx.fillStyle = col; rr(-14 * s, -14 * s, 28 * s, 24 * s, 5 * s); ctx.fill();
+  ctx.fillStyle = "rgba(0,0,0,.18)"; ctx.fillRect(-14 * s, 4 * s, 28 * s, 6 * s);
+  ctx.strokeStyle = col; ctx.lineWidth = 2 * s; ctx.beginPath(); ctx.moveTo(0, -14 * s); ctx.lineTo(0, -21 * s); ctx.stroke();
+  ctx.fillStyle = (Math.floor(now / 400 + i) % 2) ? "#fff" : col; ctx.beginPath(); ctx.arc(0, -22 * s, 2.5 * s, 0, 7); ctx.fill();
+  ctx.fillStyle = "#0b1414"; rr(-10 * s, -10 * s, 20 * s, 11 * s, 3 * s); ctx.fill();
+  ctx.fillStyle = col;
+  if (sleeping) { ctx.fillRect(-7 * s, -5 * s, 5 * s, 1.5 * s); ctx.fillRect(2 * s, -5 * s, 5 * s, 1.5 * s); }
+  else if (rule.name === "INVERT") { ctx.fillRect(-7 * s, -4 * s, 5 * s, 3 * s); ctx.fillRect(2 * s, -8 * s, 5 * s, 3 * s); }
+  else { ctx.fillRect(-7 * s, -7 * s, 4 * s, 4 * s); ctx.fillRect(3 * s, -7 * s, 4 * s, 4 * s); }
+  if (rule.name === "MIRROR") { ctx.fillStyle = "rgba(255,255,255,.5)"; ctx.fillRect(-0.5 * s, -10 * s, 1 * s, 11 * s); }
+  ctx.fillStyle = "#0b1414"; ctx.font = `700 ${Math.round(10 * s)}px ${FONT}`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(rule.custom ? "✱" : (RULE_INFO[rule.name] || ["?"])[0], 0, 6 * s);
+  ctx.textBaseline = "alphabetic";
+  ctx.restore();
+  if (fallP > 0) return;
+  ctx.font = `700 ${Math.max(9, Math.round(9 * s))}px ${FONT}`; ctx.textAlign = "center";
+  const lw = ctx.measureText(rule.name).width + 8;
+  ctx.fillStyle = "rgba(6,12,12,.8)"; rr(x - lw / 2, y - 37 * s, lw, 12 * s, 3); ctx.fill();
+  ctx.fillStyle = col; ctx.fillText(rule.name, x, y - 28 * s);
+  if (rule.delay > 0) {
+    const q = world.s.qs[i];
+    const arr = []; for (let k = 0; k < rule.delay; k++) arr.push(q[k] || "W");
+    ctx.font = `700 ${Math.round(13 * s)}px ${FONT}`;
+    arr.forEach((a, k) => {
+      ctx.globalAlpha = k === 0 ? 0.95 : 0.45;
+      ctx.fillStyle = "#e8fff9"; ctx.fillText(ARW[a], x + (k - (arr.length - 1) / 2) * 13 * s + 22 * s, y - 14 * s + k * 0);
+    });
+    ctx.globalAlpha = 1;
+  }
+  if (sleeping) {
+    ctx.fillStyle = "#e8fff9"; ctx.font = `700 ${Math.round(11 * s)}px ${FONT}`;
+    const zz = (now / 600) % 1;
+    ctx.globalAlpha = 1 - zz; ctx.fillText("z", x + 16 * s + zz * 6 * s, y - 14 * s - zz * 10 * s); ctx.globalAlpha = 1;
+  }
+}
+
+// ==RENDER: HUD==
+function drawHUD(now) {
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = "#0e1817"; ctx.fillRect(0, 0, W, 44);
+  ctx.fillStyle = COL.hazard; for (let i = 0; i < W; i += 24) ctx.fillRect(i, 42, 12, 2);
+  ctx.font = `700 20px ${FONT}`; ctx.fillStyle = COL.ink;
+  if (world.kind === "lobby") {
+    ctx.fillText("HERDING PROTOCOL", 16, 29);
+    ctx.font = `500 13px ${FONT}`; ctx.fillStyle = COL.muted;
+    ctx.fillText("You are the cat. The robots copy you — with a twist.", 222, 28);
+  }
+  else ctx.fillText(world.idx >= 0 ? `SHIFT ${world.idx + 1}/${LEVELS.length} · ${world.def.name.toUpperCase()}` : `AI SHIFT · ${world.rule.name}`, 16, 29);
+  ctx.textAlign = "right"; ctx.font = `700 13px ${FONT}`;
+  ctx.fillStyle = aiLive() ? COL.green : COL.muted;
+  ctx.fillText(aiLive() ? "AI: live" : "AI: scripted", W - 16, 28);
+  if (world.kind === "level") {
+    ctx.font = `700 18px ${FONT}`; ctx.fillStyle = world.moves > world.par ? COL.hazard : COL.ink;
+    const bk = world.idx >= 0 && best["L" + world.idx] ? `  BEST ${best["L" + world.idx]}` : "";
+    ctx.fillText(`MOVES ${world.moves} / PAR ${world.par}${bk}`, W - 120, 29);
+  }
+  // legend
+  const y0 = H - 104;
+  ctx.textAlign = "left"; ctx.font = `500 13px ${FONT}`;
+  if (world.kind === "lobby") {
+    ctx.fillStyle = COL.muted;
+    ctx.fillText("Arrows/WASD move · Space = jump in place (wait a tick) · robots copy every input · walk onto a pad", 16, y0);
+  } else {
+    let x = 16;
+    const seen = new Set();
+    world.L.robots.forEach(rb => {
+      if (seen.has(rb.rule.name)) return; seen.add(rb.rule.name);
+      const desc = rb.rule.custom ? describeRule(rb.rule) : RULE_INFO[rb.rule.name][1];
+      ctx.fillStyle = COL.robot[rb.color]; ctx.fillRect(x, y0 - 10, 10, 10);
+      ctx.font = `700 13px ${FONT}`; ctx.fillText(rb.rule.name, x + 15, y0);
+      const nw = ctx.measureText(rb.rule.name).width;
+      ctx.font = `500 13px ${FONT}`; ctx.fillStyle = COL.muted; ctx.fillText(desc, x + 20 + nw, y0);
+      x += 30 + nw + ctx.measureText(desc).width;
+    });
+    ctx.fillStyle = COL.muted; ctx.textAlign = "right";
+    ctx.fillText("all bots on matching plates + cat on EXIT", W - 16, y0);
+  }
+  // foreman speech bar
+  const by = H - 86;
+  ctx.fillStyle = "#0e1817"; rr(12, by, W - 24, 74, 10); ctx.fill();
+  ctx.strokeStyle = speech.src === "ai" ? COL.green : "#2c4542"; ctx.lineWidth = 2; ctx.stroke();
+  drawForeman(52, by + 38, now);
+  ctx.textAlign = "left"; ctx.font = `700 12px ${FONT}`; ctx.fillStyle = COL.hazard;
+  ctx.fillText("FACTORY FOREMAN" + (speech.src === "ai" ? "  · live" : ""), 96, by + 22);
+  const shown = speech.text.slice(0, Math.floor((now - speech.t0) / 22));
+  ctx.font = `500 19px ${FONT}`; ctx.fillStyle = COL.ink;
+  ctx.fillText(shown, 96, by + 50, W - 130);
+}
+function drawForeman(x, y, now) {
+  const talking = (now - speech.t0) / 22 < speech.text.length;
+  ctx.save(); ctx.translate(x, y);
+  ctx.fillStyle = "#5d6b6a"; rr(-22, -22, 44, 40, 6); ctx.fill();
+  ctx.fillStyle = COL.hazard; ctx.fillRect(-22, -26, 44, 7);
+  ctx.fillStyle = "#14100a"; for (let i = -20; i < 22; i += 8) ctx.fillRect(i, -26, 4, 7);
+  ctx.fillStyle = "#0b1414"; rr(-16, -14, 32, 22, 4); ctx.fill();
+  ctx.fillStyle = COL.red; ctx.fillRect(-11, -9, 8, 3); ctx.fillRect(3, -9, 8, 3);
+  ctx.fillStyle = "#ff8a8a"; ctx.fillRect(-11, -6, 8, 2); ctx.fillRect(3, -6, 8, 2);
+  const mh = talking ? 2 + Math.abs(Math.sin(now / 60)) * 4 : 2;
+  ctx.fillStyle = COL.red; ctx.fillRect(-7, 1 + (6 - mh) / 2, 14, mh);
+  ctx.restore();
+}
+
+// ==MAIN LOOP==
+let lastT = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
+  if (anim && now - anim.t0 >= anim.dur) {
+    anim = null;
+    if (afterAnim) { const f = afterAnim; afterAnim = null; f(); }
+  }
+  if (!anim && queue.length && (mode === "play" || mode === "lobby")) doMove(queue.shift());
+  catSquash = Math.max(0, catSquash - dt * 7);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = COL.frame; ctx.fillRect(0, 0, W, H);
+  let sx = 0, sy = 0;
+  if (shake > 0) { sx = (Math.random() - 0.5) * shake; sy = (Math.random() - 0.5) * shake; shake = Math.max(0, shake - dt * 30); }
+  ctx.save(); ctx.translate(sx, sy);
+  const L = world.L, { T, ox, oy } = layout(L);
+  ctx.fillStyle = "#081011"; rr(ox - 10, oy - 16, L.w * T + 20, L.h * T + 24, 10); ctx.fill();
+  drawTiles(now);
+  const pos = actorPos(now);
+  const items = [];
+  pos.rs.forEach((p, i) => items.push({ y: p[1], f: () => {
+    const fp = (mode === "falling" && i === fallen) ? Math.min(1, (now - failAt) / 600) : 0;
+    drawRobot(i, ox + (p[0] + pos.bumps.rs[i][0] + 0.5) * T, oy + (p[1] + pos.bumps.rs[i][1] + 0.5) * T, T, now, fp);
+  } }));
+  const hop = anim && anim.k === "W" ? Math.sin(Math.min(1, (now - anim.t0) / anim.dur) * Math.PI) * 0.35 : 0;
+  items.push({ y: pos.cat[1] + 0.01, f: () => drawCat(ox + (pos.cat[0] + pos.bumps.cat[0] * (hop ? 0 : 1) + 0.5) * T, oy + (pos.cat[1] + (hop ? 0 : pos.bumps.cat[1]) + 0.5) * T, T, now, hop) });
+  items.sort((a, b) => a.y - b.y).forEach(it => it.f());
+  particles = particles.filter(p => (p.t += dt) < p.life);
+  particles.forEach(p => {
+    p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 260 * dt;
+    ctx.globalAlpha = 1 - p.t / p.life; ctx.fillStyle = p.col; ctx.fillRect(p.x - p.s / 2, p.y - p.s / 2, p.s, p.s);
+  });
+  ctx.globalAlpha = 1;
+  ctx.restore();
+  drawHUD(now);
+  if (banner) {
+    const bt = (now - banner.t0) / 1000;
+    if (bt > 2.2) banner = null;
+    else {
+      const a = Math.min(1, bt * 4, (2.2 - bt) * 3);
+      ctx.globalAlpha = a; ctx.fillStyle = "rgba(8,14,14,.88)"; ctx.fillRect(0, H / 2 - 50, W, 84);
+      ctx.fillStyle = COL.hazard; ctx.fillRect(0, H / 2 - 50, W, 3); ctx.fillRect(0, H / 2 + 31, W, 3);
+      ctx.textAlign = "center"; ctx.font = `700 34px ${FONT}`; ctx.fillStyle = COL.ink; ctx.fillText(banner.title, W / 2, H / 2 - 6);
+      ctx.font = `700 15px ${FONT}`; ctx.fillStyle = COL.hazard; ctx.fillText(banner.sub, W / 2, H / 2 + 20);
+      ctx.globalAlpha = 1;
+    }
+  }
+  if (mode === "won" && !anim) {
+    const a = Math.min(1, (now - wonAt) / 400);
+    ctx.globalAlpha = a; ctx.fillStyle = "rgba(8,14,14,.8)"; ctx.fillRect(0, H / 2 - 46, W, 70);
+    ctx.textAlign = "center"; ctx.font = `700 32px ${FONT}`; ctx.fillStyle = COL.green;
+    ctx.fillText(`SHIFT CLEARED · ${world.moves} MOVES (PAR ${world.par})`, W / 2, H / 2 - 4);
+    ctx.font = `500 13px ${FONT}`; ctx.fillStyle = COL.muted; ctx.fillText("move to continue", W / 2, H / 2 + 16);
+    ctx.globalAlpha = 1;
+  }
+  if (flash > 0) { ctx.fillStyle = `rgba(255,77,77,${flash * 0.25})`; ctx.fillRect(0, 0, W, H); flash = Math.max(0, flash - dt * 3); }
+  requestAnimationFrame(frame);
+}
+goLobby();
+requestAnimationFrame(frame);
+</script>

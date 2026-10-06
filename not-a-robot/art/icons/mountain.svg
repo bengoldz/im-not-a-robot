@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 512 512">
+  <defs>
+    <path id="mtn" d="M62 428 L206 108 L292 270 L346 186 L450 428 Z"/>
+    <clipPath id="mtn-c"><use xlink:href="#mtn"/></clipPath>
+  </defs>
+  <g stroke-linejoin="round" stroke-linecap="round">
+    <use xlink:href="#mtn" fill="#1d2433" stroke="#1d2433" stroke-width="28"/>
+    <g clip-path="url(#mtn-c)">
+      <rect x="40" y="90" width="430" height="360" fill="#7d8597"/>
+      <!-- cel shadows on right faces -->
+      <path d="M206 108 L300 286 L262 340 L268 440 L190 440 L216 360 L190 290 L222 220 Z" fill="#5f677b"/>
+      <path d="M346 186 L460 440 L380 440 L392 380 L362 320 L376 262 Z" fill="#5f677b"/>
+      <!-- lit ridge highlights -->
+      <path d="M180 196 L122 330" fill="none" stroke="#9aa1b2" stroke-width="12"/>
+      <path d="M326 236 L304 290" fill="none" stroke="#9aa1b2" stroke-width="10"/>
+      <!-- snow caps -->
+      <path d="M206 100 L262 206 L240 194 L222 214 L204 192 L182 206 L162 196 Z" fill="#ffffff"/>
+      <path d="M206 100 L262 206 L240 194 L222 214 L212 190 Z" fill="#d3dbe8"/>
+      <path d="M346 178 L382 262 L366 252 L350 266 L338 250 L320 258 Z" fill="#ffffff"/>
+      <path d="M346 178 L382 262 L366 252 L350 266 L346 246 Z" fill="#d3dbe8"/>
+      <!-- rock cracks -->
+      <path d="M150 380 L176 360 M318 380 L338 366 M232 300 L246 286" fill="none" stroke="#5f677b" stroke-width="6"/>
+    </g>
+    <path d="M162 196 L182 206 L204 192 L222 214 L240 194 L262 206" fill="none" stroke="#1d2433" stroke-width="8.5"/>
+    <path d="M320 258 L338 250 L350 266 L366 252 L382 262" fill="none" stroke="#1d2433" stroke-width="8.5"/>
+  </g>
+</svg>

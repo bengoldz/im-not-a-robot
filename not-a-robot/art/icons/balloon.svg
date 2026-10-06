@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 512 512">
+  <defs>
+    <path id="balloon" d="M256 62 C344 62 390 134 390 208 C390 298 320 358 270 370 L242 370 C192 358 122 298 122 208 C122 134 168 62 256 62 Z"/>
+    <clipPath id="balloon-c"><use xlink:href="#balloon"/></clipPath>
+    <clipPath id="balloon-lit"><use xlink:href="#balloon" transform="translate(-24 -22)"/></clipPath>
+  </defs>
+  <g stroke-linejoin="round" stroke-linecap="round">
+    <!-- string -->
+    <path d="M256 390 Q230 408 254 424 Q278 440 254 450" fill="none" stroke="#1d2433" stroke-width="8.5"/>
+    <!-- knot -->
+    <path d="M236 392 L256 368 L276 392 Q256 400 236 392 Z" fill="#c22233" stroke="#1d2433" stroke-width="14"/>
+    <use xlink:href="#balloon" fill="#1d2433" stroke="#1d2433" stroke-width="28"/>
+    <g clip-path="url(#balloon-c)">
+      <rect x="100" y="50" width="310" height="330" fill="#bf2433"/>
+      <rect x="100" y="50" width="310" height="330" fill="#e63946" clip-path="url(#balloon-lit)"/>
+      <!-- shiny highlight -->
+      <ellipse cx="192" cy="150" rx="22" ry="42" transform="rotate(24 192 150)" fill="#ffffff" opacity="0.65"/>
+      <circle cx="172" cy="214" r="9" fill="#ffffff" opacity="0.65"/>
+    </g>
+  </g>
+</svg>

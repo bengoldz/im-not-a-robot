@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 512 512">
+  <defs>
+    <path id="canopy" d="M66 256 C66 140 150 80 256 80 C362 80 446 140 446 256 Q398 220 351 256 Q304 220 256 256 Q208 220 161 256 Q114 220 66 256 Z"/>
+    <clipPath id="canopy-c"><use xlink:href="#canopy"/></clipPath>
+  </defs>
+  <g stroke-linejoin="round" stroke-linecap="round">
+    <!-- rain -->
+    <path d="M104 300 L94 326 M146 356 L136 382 M188 306 L180 326 M330 306 L322 326 M370 356 L360 382 M414 300 L404 326 M112 420 L104 440 M404 418 L396 438" fill="none" stroke="#4f88c6" stroke-width="10"/>
+    <!-- shaft and hook -->
+    <path d="M256 236 L256 404 Q256 444 226 444 Q200 444 200 418" fill="none" stroke="#1d2433" stroke-width="16"/>
+    <!-- canopy -->
+    <use xlink:href="#canopy" fill="#1d2433" stroke="#1d2433" stroke-width="28"/>
+    <g clip-path="url(#canopy-c)">
+      <rect x="50" y="70" width="412" height="200" fill="#4fa3e0"/>
+      <!-- right panel shadow and lower rim -->
+      <path d="M256 80 Q336 120 352 260 L460 260 L460 70 Z" fill="#3683c4"/>
+      <path d="M50 236 Q256 200 462 236 L462 270 L50 270 Z" fill="#3683c4"/>
+      <!-- middle panel slightly lighter? keep base; highlight on upper-left panel -->
+      <path d="M124 186 Q146 130 206 106" fill="none" stroke="#8cc6ef" stroke-width="14"/>
+      <circle cx="112" cy="214" r="7" fill="#8cc6ef"/>
+    </g>
+    <!-- ribs -->
+    <path d="M256 82 Q186 130 161 254 M256 82 Q326 130 351 254 M256 82 L256 254" fill="none" stroke="#1d2433" stroke-width="8.5"/>
+    <!-- tip -->
+    <circle cx="256" cy="70" r="9" fill="#1d2433"/>
+    <!-- grip -->
+    <path d="M256 380 L256 404" fill="none" stroke="#5d7590" stroke-width="6"/>
+  </g>
+</svg>

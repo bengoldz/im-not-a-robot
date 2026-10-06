@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 512 512">
+  <defs>
+    <path id="moon" d="M234.7 94 A168 168 0 1 0 389.1 331.1 A142 142 0 0 1 234.7 94 Z"/>
+    <clipPath id="moon-c"><use xlink:href="#moon"/></clipPath>
+    <clipPath id="moon-lit"><use xlink:href="#moon" transform="translate(-20 -18)"/></clipPath>
+    <path id="star" d="M0 -26 Q4 -4 26 0 Q4 4 0 26 Q-4 4 -26 0 Q-4 -4 0 -26 Z"/>
+  </defs>
+  <g stroke-linejoin="round" stroke-linecap="round" transform="translate(10 -6)">
+    <use xlink:href="#moon" fill="#1d2433" stroke="#1d2433" stroke-width="28"/>
+    <g clip-path="url(#moon-c)">
+      <rect x="50" y="80" width="360" height="370" fill="#f5cd62"/>
+      <rect x="50" y="80" width="360" height="370" fill="#ffe9a6" clip-path="url(#moon-lit)"/>
+      <!-- craters -->
+      <circle cx="206" cy="146" r="14" fill="#f5cd62"/>
+      <circle cx="288" cy="372" r="18" fill="#f5cd62"/>
+      <circle cx="226" cy="388" r="9" fill="#f5cd62"/>
+      <!-- highlight -->
+      <path d="M106 222 Q120 168 160 136" fill="none" stroke="#fff7dc" stroke-width="14"/>
+      <circle cx="98" cy="252" r="7" fill="#fff7dc"/>
+    </g>
+    <!-- face -->
+    <ellipse cx="136" cy="300" rx="12" ry="16" fill="#1d2433"/>
+    <ellipse cx="190" cy="288" rx="12" ry="16" fill="#1d2433"/>
+    <circle cx="132" cy="294" r="4.5" fill="#ffffff"/>
+    <circle cx="186" cy="282" r="4.5" fill="#ffffff"/>
+    <path d="M148 336 Q166 350 184 330" fill="none" stroke="#1d2433" stroke-width="8.5"/>
+    <ellipse cx="118" cy="334" rx="14" ry="9" fill="#ff8fa3" opacity="0.6"/>
+    <ellipse cx="210" cy="320" rx="14" ry="9" fill="#ff8fa3" opacity="0.6"/>
+    <!-- sparkles -->
+    <use xlink:href="#star" transform="translate(372 146)" fill="#ffe9a6" stroke="#1d2433" stroke-width="8.5"/>
+    <use xlink:href="#star" transform="translate(410 230) scale(0.55)" fill="#ffe9a6" stroke="#1d2433" stroke-width="13"/>
+  </g>
+</svg>

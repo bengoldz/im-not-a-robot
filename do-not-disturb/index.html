@@ -1,0 +1,1149 @@
+<title>Do Not Disturb</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=VT323&display=swap" rel="stylesheet">
+<style>
+:root{
+  color-scheme: dark;
+  --bg:#05080f;
+  --panel:#0b1422;
+  --accent:#5ef0ff;
+  --btn:#13233a;
+  --btn-edge:#2c4a70;
+  --btn-text:#cfe9ff;
+}
+html,body{height:100%;margin:0;padding:0;background:var(--bg);overflow:hidden;}
+body{color:var(--btn-text);font-family:"Chakra Petch","Trebuchet MS",sans-serif;touch-action:none;-webkit-user-select:none;user-select:none;}
+#wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;}
+#wrap.touch{align-items:flex-start;padding-top:8px;}
+canvas{display:block;background:var(--bg);max-width:100%;}
+#touch{display:none;position:fixed;left:0;right:0;bottom:0;height:170px;pointer-events:none;}
+#touch.on{display:block;}
+#touch button{position:absolute;pointer-events:auto;width:54px;height:54px;border-radius:14px;border:2px solid var(--btn-edge);
+  background:var(--btn);color:var(--btn-text);font:700 13px "Chakra Petch",sans-serif;opacity:.85;touch-action:none;padding:0;}
+#touch button.dn{background:var(--btn-edge);}
+</style>
+<div id="wrap"><canvas id="c" width="960" height="540"></canvas></div>
+<div id="touch">
+  <button data-k="up" style="left:66px;bottom:110px">&#9650;</button>
+  <button data-k="left" style="left:8px;bottom:56px">&#9664;</button>
+  <button data-k="right" style="left:124px;bottom:56px">&#9654;</button>
+  <button data-k="down" style="left:66px;bottom:2px">&#9660;</button>
+  <button data-k="jump" style="right:8px;bottom:84px;width:70px">POUNCE</button>
+  <button data-k="dash" style="right:86px;bottom:84px;width:62px">DASH</button>
+  <button data-k="crouch" style="right:8px;bottom:22px;width:140px;height:54px">CROUCH</button>
+</div>
+<script>
+// ===== Setup =====
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const W = 960, H = 540, T = 30, MW = 22, MH = 18, MAPW = MW * T;
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const isTouch = matchMedia('(pointer: coarse)').matches;
+const COL = {
+  wall:'#0a0f1a', wallTop:'#2a3c58', panel:'#0b1422', accent:'#5ef0ff', heat:'255,61,110',
+  cat:'#f2a541', catDark:'#c4752a', eye:'#9cf5c8', fish:'#9fd8ff', pad:'#b6f05a', text:'#cfe9ff', dim:'#6c86a6',
+  warn:'#ffd166', alert:'#ff4d6d'
+};
+const FONT_UI = '"Chakra Petch","Trebuchet MS",sans-serif';
+const FONT_LOG = '"VT323","Courier New",monospace';
+
+// ===== Live AI =====
+let sample = null;          // live AI function, or null
+(async () => {
+  try { if (window.claude && window.claude.use) sample = await window.claude.use("sample"); } catch (e) { sample = null; }
+})();
+let aiBusy = false, aiDisabled = false, aiWanted = false;
+async function askAI(prompt, fallback) {
+  if (!sample || aiDisabled || aiBusy) return fallback();
+  aiBusy = true;
+  try {
+    const { text } = await sample(prompt, { modelTier: "quick", cache: false });
+    return (text || "").trim() || fallback();
+  } catch (e) {
+    if (["not_granted","sampling_disabled","not_declared","capability_disabled","capability_removed"].includes(e && e.code)) aiDisabled = true;
+    return fallback();
+  } finally { aiBusy = false; }
+}
+function aiLive() { return aiWanted && !!sample && !aiDisabled; }
+
+// ===== Map =====
+const MAP_SRC = [
+  "######################",
+  "#...#.......#KKKKKKKK#",
+  "#...#..FFF..#........#",
+  "#......FFF.....KK....#",
+  "#...#.......#..KK....#",
+  "#H..#.......#........#",
+  "#H..######.####.###.##",
+  "#...#............#...#",
+  "#.......SSSS.....#..H#",
+  "#...#...SSSS.....#..H#",
+  "#...#................#",
+  "##.#####.........#...#",
+  "#......#.........#...#",
+  "#......#.....HHH.#...#",
+  "#............PPP.#...#",
+  "#......#.............#",
+  "#......#.........#...#",
+  "######################"
+];
+const grid = MAP_SRC.map(r => r.slice(0, MW).padEnd(MW, '#').split(''));
+const FURN = 'KFSH';
+const GATES = [[2, 11], [7, 14]];
+const DIRS8 = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+function tch(tx, ty) { return (tx < 0 || ty < 0 || tx >= MW || ty >= MH) ? '#' : grid[ty][tx]; }
+function isWallT(tx, ty) {
+  if (tch(tx, ty) === '#') return true;
+  if (mode === 'menu' || mode === 'won') for (const g of GATES) if (g[0] === tx && g[1] === ty) return true;
+  return false;
+}
+function isFurnT(tx, ty) { return FURN.includes(tch(tx, ty)); }
+function wallAt(x, y) { return isWallT(Math.floor(x / T), Math.floor(y / T)); }
+function furnAt(x, y) { return isFurnT(Math.floor(x / T), Math.floor(y / T)); }
+function tc(t) { return t * T + T / 2; }
+
+// ===== Zones & layout data =====
+const ZN = ['BASKET ROOM', 'LEFT HALL', 'DINING ROOM', 'KITCHEN', 'LIVING ROOM', 'RIGHT HALL'];
+function zoneOf(tx, ty) {
+  if (tx >= 1 && tx <= 6 && ty >= 12 && ty <= 16) return 0;
+  if (tx <= 3 && ty <= 11) return 1;
+  if (tx >= 4 && tx <= 11 && ty <= 6) return 2;
+  if (tx >= 12 && ty <= 6) return 3;
+  if (tx >= 17 && ty >= 7) return 5;
+  return 4;
+}
+function zoneAtPx(x, y) { return zoneOf(Math.floor(x / T), Math.floor(y / T)); }
+const WPS = [[2,2],[2,9],[6,2],[10,4],[14,2],[19,4],[6,8],[13,8],[10,15],[16,12],[19,8],[19,15],[13,11]]
+  .map(([x, y]) => ({ x: tc(x), y: tc(y), z: zoneOf(x, y) }));
+const LAMP_AT = { 1:[2,8], 2:[6,4], 3:[14,5], 4:[13,10], 5:[19,12] };
+const DRONE_AT = { 1:[2.5,6,0.7,3.8], 2:[8.5,3.5,3,1.6], 3:[16.5,3.8,3,1.4], 4:[12,10.5,3.5,2.4], 5:[19.5,11.5,0.7,3.8] };
+const BASKET = { x: tc(2), y: tc(14) };
+const FISH_HOME = { x: tc(17), y: tc(1) };
+const ROOMBA_PATH = [[6,7],[16,7],[16,11],[8,11],[8,10],[6,10]].map(([x, y]) => ({ x: tc(x), y: tc(y) }));
+const PIANO = { x: tc(14), y: tc(14) };
+const DOCK = { x: tc(12), y: tc(15) };
+const PADS = [
+  { x: 4 * T + 2, y: 12 * T + 3, w: 2 * T - 4, h: T - 6, label: 'START', act: 'start' },
+  { x: 4 * T + 2, y: 14 * T + 3, w: 2 * T - 4, h: T - 6, label: 'AI ON', act: 'ai' },
+  { x: 4 * T + 2, y: 16 * T + 3, w: 2 * T - 4, h: T - 6, label: 'RESET MEMORY', act: 'reset' }
+];
+const LURE_IGNORE = 4;
+
+// ===== Memory (heatmap) =====
+let mem = freshMem();
+function freshMem() { return { heat: new Array(MW * MH).fill(0), catches: 0, lures: {}, lastLure: '', nights: 0, wins: 0 }; }
+function loadMem() {
+  try {
+    const raw = localStorage.getItem('dnd_robot_mem');
+    if (raw) { const m = JSON.parse(raw); if (m && Array.isArray(m.heat) && m.heat.length === MW * MH) mem = Object.assign(freshMem(), m); }
+  } catch (e) { /* storage unavailable */ }
+}
+function saveMem() { try { localStorage.setItem('dnd_robot_mem', JSON.stringify(mem)); } catch (e) { /* ignore */ } }
+function addHeat(x, y, w) {
+  const tx = Math.floor(x / T), ty = Math.floor(y / T);
+  if (tx < 0 || ty < 0 || tx >= MW || ty >= MH) return;
+  mem.heat[ty * MW + tx] += w;
+}
+function zoneSummary() {
+  const s = [0, 0, 0, 0, 0, 0];
+  for (let i = 0; i < mem.heat.length; i++) { const z = zoneOf(i % MW, (i / MW) | 0); if (z) s[z] += mem.heat[i]; }
+  const tot = s.reduce((a, b) => a + b, 0);
+  if (tot < 0.5) return [];
+  return s.map((v, i) => ({ z: i, name: ZN[i], pct: Math.round(100 * v / tot), share: v / tot }))
+    .filter(o => o.z !== 0 && o.pct > 0).sort((a, b) => b.share - a.share);
+}
+
+// ===== Audio =====
+let actx = null;
+function initAudio() {
+  if (actx) return;
+  try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { actx = null; }
+}
+function tone(f, dur, type = 'sine', vol = 0.08, f2 = 0, delay = 0) {
+  if (!actx) return;
+  const t0 = actx.currentTime + delay;
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.type = type; o.frequency.setValueAtTime(f, t0);
+  if (f2) o.frequency.exponentialRampToValueAtTime(f2, t0 + dur);
+  g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(vol, t0 + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g); g.connect(actx.destination); o.start(t0); o.stop(t0 + dur + 0.02);
+}
+function noiseBurst(dur, vol = 0.05, hp = 800) {
+  if (!actx) return;
+  const n = Math.floor(actx.sampleRate * dur), b = actx.createBuffer(1, n, actx.sampleRate), d = b.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+  const s = actx.createBufferSource(), f = actx.createBiquadFilter(), g = actx.createGain();
+  f.type = 'highpass'; f.frequency.value = hp; g.gain.value = vol;
+  s.buffer = b; s.connect(f); f.connect(g); g.connect(actx.destination); s.start();
+}
+const SFX = {
+  step: () => tone(140 + Math.random() * 30, 0.05, 'triangle', 0.035),
+  dash: () => noiseBurst(0.09, 0.05, 1500),
+  pounce: () => tone(300, 0.15, 'sine', 0.06, 700),
+  land: () => tone(120, 0.08, 'triangle', 0.06, 70),
+  squeak: () => { tone(900, 0.12, 'square', 0.05, 1500); tone(1400, 0.1, 'square', 0.04, 800, 0.1); },
+  piano: () => { const n = [262, 294, 330, 392, 440, 523, 587]; tone(n[(Math.random() * n.length) | 0], 0.4, 'triangle', 0.06); },
+  beep: () => { tone(880, 0.07, 'square', 0.03); tone(660, 0.07, 'square', 0.03, 0, 0.09); },
+  alert: () => { tone(520, 0.1, 'sawtooth', 0.05); tone(780, 0.16, 'sawtooth', 0.05, 0, 0.1); },
+  huh: () => tone(400, 0.18, 'sine', 0.05, 620),
+  catch: () => [523, 440, 349, 262].forEach((f, i) => tone(f, 0.18, 'triangle', 0.06, 0, i * 0.12)),
+  fish: () => [660, 880, 1320].forEach((f, i) => tone(f, 0.12, 'sine', 0.07, 0, i * 0.07)),
+  clear: () => [392, 494, 587, 784, 988].forEach((f, i) => tone(f, 0.2, 'triangle', 0.07, 0, i * 0.09)),
+  pad: () => tone(600, 0.08, 'square', 0.04, 900),
+  scan: () => tone(200, 1.3, 'sine', 0.04, 900),
+  lamp: () => tone(1200, 0.05, 'square', 0.04)
+};
+
+// ===== Input =====
+const KEYMAP = { ArrowUp:'up', KeyW:'up', ArrowDown:'down', KeyS:'down', ArrowLeft:'left', KeyA:'left', ArrowRight:'right', KeyD:'right',
+  KeyC:'crouch', ShiftLeft:'dash', ShiftRight:'dash', Space:'jump' };
+const input = { up:false, down:false, left:false, right:false, crouch:false, dash:false, jump:false };
+let prevJump = false;
+addEventListener('keydown', e => {
+  initAudio(); if (actx && actx.state === 'suspended') actx.resume();
+  const k = KEYMAP[e.code]; if (k) { input[k] = true; e.preventDefault(); }
+});
+addEventListener('keyup', e => { const k = KEYMAP[e.code]; if (k) { input[k] = false; e.preventDefault(); } });
+addEventListener('blur', () => { for (const k in input) input[k] = false; });
+const touchEl = document.getElementById('touch');
+if (isTouch) {
+  touchEl.classList.add('on'); document.getElementById('wrap').classList.add('touch');
+  touchEl.querySelectorAll('button').forEach(b => {
+    const k = b.dataset.k;
+    const on = e => { e.preventDefault(); initAudio(); if (actx && actx.state === 'suspended') actx.resume(); input[k] = true; b.classList.add('dn'); };
+    const off = e => { e.preventDefault(); input[k] = false; b.classList.remove('dn'); };
+    b.addEventListener('pointerdown', on); b.addEventListener('pointerup', off);
+    b.addEventListener('pointercancel', off); b.addEventListener('pointerleave', off);
+  });
+}
+function fit() {
+  const aw = innerWidth, ah = innerHeight - (isTouch ? 180 : 0);
+  const s = Math.max(0.1, Math.min(aw / W, ah / H));
+  cv.style.width = Math.floor(W * s) + 'px'; cv.style.height = Math.floor(H * s) + 'px';
+}
+addEventListener('resize', fit); fit();
+
+// ===== State =====
+let mode = 'menu', night = 1, gameT = 0, playT = 0, scanT = 99, clearT = 0, wonT = 0, shake = 0;
+let lastCatchZone = '', menuMsg = '';
+const cat = { x: BASKET.x, y: BASKET.y, vx: 0, vy: 0, face: -Math.PI / 2, elev: false, air: 0, airDur: 0.36, jx0: 0, jy0: 0, jx1: 0, jy1: 0,
+  crouch: false, dash: false, moving: false, stepT: 0, hasFish: false, riding: false, rideExit: 0, carried: false, pcool: 0, squash: 0 };
+const fish = { x: FISH_HOME.x, y: FISH_HOME.y, taken: false };
+const robot = { x: DOCK.x, y: DOCK.y, a: -Math.PI / 2, state: 'sleep', path: [], wait: 0, baseA: 0, susp: 0, lastSeen: null, repath: 0,
+  linger: 2, recent: [], icon: '', iconT: 0, stepLogT: 0, zoneW: [1, 1, 1, 1, 1, 1], ignoredLog: {}, bob: 0 };
+const toy = { x: tc(9), y: tc(10), vx: 0, vy: 0, cool: 0, pending: false };
+const roomba = { x: ROOMBA_PATH[0].x, y: ROOMBA_PATH[0].y, i: 1, confused: 0, beepT: 0, cool: 0, a: 0 };
+const piano = { play: 0, cool: 0, noteT: 0, ringT: 0 };
+let lamp = null, drone = null;
+let rings = [], parts = [], banners = [], logs = [];
+
+// ===== Log & AI lines =====
+function clockStr() { const m = Math.floor(playT * 0.5); return '0' + (1 + Math.floor(m / 60)) % 10 + ':' + String(m % 60).padStart(2, '0'); }
+function log(text, kind = 'sys') { const l = { text, kind, t: mode === 'menu' ? '--:--' : clockStr() }; logs.push(l); if (logs.length > 60) logs.shift(); return l; }
+const TPL = {
+  start: [
+    'Pattern: subject prefers {z1} ({p1}%). Rerouting patrol.',
+    '{z1} holds {p1}% of sightings. I will simply be there first.',
+    'Night {n}. {c} retrievals logged. The fish remains under my care.',
+    'Recalibrating: {z1} {p1}%, {z2} {p2}%. Predictable little mammal.',
+    'Patrol weights updated. {z1} is now my favourite room. Coincidence.',
+    'Your {lure} trick has been noted, filed, and found wanting.',
+    'I have mapped your habits. They map to {z1}.',
+    'Good evening. Silent mode engaged. Your pawprints are not.',
+    'Probability you route through {z1}: high. Probability you win: noted.',
+    'Memory intact: {c} incidents. Kitchen security at 100%. Please rest.',
+    'No prior data. Default patrol loaded. Do not disturb.',
+    'Fresh memory. I will learn quickly. I always do.'
+  ],
+  catch: [
+    'Subject retrieved from {zc}. Basket delivery is complimentary.',
+    'Catch #{c}. {z1} confirmed as preferred route ({p1}%).',
+    'Retrieval complete. Please remain in your designated sleeping area.',
+    'The {lure} was charming. I have updated my priorities accordingly.',
+    'Incident logged in {zc}. Updating heatmap. Thank you for the data.',
+    'You are very soft and very predictable. Returning you now.',
+    '{c} retrievals. My model grows more accurate with every paw.',
+    'Detected: one cat, zero stealth. Rerouting through {z1}.',
+    'Gentle retrieval mode. Struggling is logged but not encouraged.'
+  ],
+  boot: ['Voice module online. I will narrate your failures.', 'Language core active. Hello, small intruder.', 'Speech enabled. Please keep paws off the counter.'],
+  win: ['Three fish missing. Recalculating my entire worldview.', 'Anomaly: the cat outperformed the model. Filing a bug.', 'Fish inventory: zero. Dignity inventory: also zero.']
+};
+function statCtx() {
+  const S = zoneSummary();
+  return { z1: S[0] && S[0].name, p1: S[0] && S[0].pct, z2: S[1] && S[1].name, p2: S[1] && S[1].pct,
+    c: mem.catches, n: night, lure: mem.lastLure || undefined, zc: lastCatchZone || undefined };
+}
+function fallbackLine(ev) {
+  const c = statCtx();
+  let pool = TPL[ev].filter(t => !/\{(\w+)\}/.test(t) || [...t.matchAll(/\{(\w+)\}/g)].every(m => c[m[1]] !== undefined && c[m[1]] !== ''));
+  if (ev === 'start' && c.z1) pool = pool.filter(t => !t.startsWith('No prior') && !t.startsWith('Fresh'));
+  if (!pool.length) pool = TPL[ev].filter(t => !t.includes('{'));
+  return pool[(Math.random() * pool.length) | 0].replace(/\{(\w+)\}/g, (m, k) => c[k]);
+}
+function cleanAI(s) {
+  s = String(s || '').split('\n').map(x => x.trim()).filter(Boolean)[0] || '';
+  s = s.replace(/^["'`*\s>-]+|["'`*\s]+$/g, '');
+  return s.length > 90 ? s.slice(0, 89) + '…' : s;
+}
+const EVENT_DESC = {
+  start: () => `night ${night} of 3 begins; you rerouted your patrol from the heatmap`,
+  catch: () => `you just caught the cat in the ${lastCatchZone} and are carrying it back to its basket`,
+  boot: () => 'your voice module just came online',
+  win: () => 'the cat stole the fish on all 3 nights; you are processing defeat'
+};
+function robotVoice(ev) {
+  const fb = () => fallbackLine(ev);
+  if (!aiWanted) { log(fb(), 'ai'); return; }
+  const line = log('…', 'ai');
+  const S = zoneSummary().slice(0, 3).map(z => `${z.name} ${z.pct}%`).join(', ') || 'no data yet';
+  const prompt = `You are HB-9, a calm, clinical, slightly smug smart-home security robot guarding a fish from a house cat. ` +
+    `Heatmap of where you saw/heard the cat - top zones: ${S}. Total catches: ${mem.catches}. Last lure the cat used: ${mem.lastLure || 'none'}. ` +
+    `Event: ${EVENT_DESC[ev]()}. Write ONE robot log line, max 90 characters, citing the data. No quotes, no emoji.`;
+  askAI(prompt, fb).then(t => { line.text = cleanAI(t) || fb(); });
+}
+
+// ===== FX =====
+function ring(x, y, r, color, w = 2) { rings.push({ x, y, r: 4, max: r, color, w, life: 1 }); }
+function burst(x, y, n, color, sp = 80) {
+  for (let i = 0; i < n; i++) { const a = Math.random() * 6.283, s = sp * (0.3 + Math.random()); parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.5 + Math.random() * 0.4, color }); }
+}
+function banner(text, sub, dur = 2.6) { banners = [{ text, sub, t: 0, dur }]; }
+function addShake(a) { shake = Math.max(shake, reduceMotion ? a * 0.15 : a); }
+
+// ===== Noise & hearing =====
+function emitNoise(x, y, rTiles, kind, label) {
+  const color = kind === 'step' ? 'rgba(220,235,255,0.55)' : kind === 'dash' ? 'rgba(255,170,80,0.8)' : kind === 'lamp' ? 'rgba(255,209,102,0.9)' : 'rgba(255,90,200,0.9)';
+  ring(x, y, rTiles * T, color, kind === 'lure' ? 3 : 2);
+  if (kind === 'lure') { ring(x, y, rTiles * T * 0.6, color, 2); }
+  if (kind === 'step') addHeat(x, y, 0.12);
+  if (kind === 'dash') addHeat(x, y, 0.35);
+  robotHear(x, y, rTiles * T, kind, label);
+}
+function robotHear(x, y, r, kind, label) {
+  const R = robot;
+  if (mode !== 'play' || ['grab', 'carry', 'drop', 'sleep'].includes(R.state)) return;
+  if (kind === 'lamp') r = 1e9;
+  else if (kind !== 'lure' && !los(R.x, R.y, x, y)) r *= 0.6;
+  if (Math.hypot(R.x - x, R.y - y) > r) return;
+  let linger = 2.5;
+  if (kind === 'lure') {
+    const uses = Math.max(0, (mem.lures[label] || 0) - 1);
+    if (uses >= LURE_IGNORE) {
+      if (!R.ignoredLog[label]) { R.ignoredLog[label] = 1; log(`Lure '${label}' recognised (${uses}x). Ignoring.`); }
+      return;
+    }
+    linger = Math.max(1.2, 4.5 - uses * 0.8);
+    log(`Audio anomaly: ${label} in ${ZN[zoneAtPx(x, y)]}. Investigating.`);
+  } else if (kind === 'lamp') {
+    linger = 3;
+  } else if (R.stepLogT <= 0) {
+    R.stepLogT = 4; log(`Audio: ${kind === 'dash' ? 'galloping' : 'pawsteps'} in ${ZN[zoneAtPx(x, y)]}.`);
+  }
+  if (R.state === 'chase') return;
+  if (R.state !== 'inv') SFX.huh();
+  R.state = 'inv'; R.linger = linger; R.icon = '?'; R.iconT = 1.5;
+  robotGoTo(x, y, false);
+}
+
+// ===== Geometry & pathfinding =====
+function los(x0, y0, x1, y1) {
+  const d = Math.hypot(x1 - x0, y1 - y0), n = Math.ceil(d / 6);
+  for (let i = 1; i < n; i++) { const t = i / n; if (wallAt(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)) return false; }
+  return true;
+}
+function angDiff(a, b) { let d = a - b; while (d > Math.PI) d -= 6.2832; while (d < -Math.PI) d += 6.2832; return d; }
+function robWalk(tx, ty, allowB) { return !isWallT(tx, ty) && !isFurnT(tx, ty) && (allowB || zoneOf(tx, ty) !== 0); }
+function nearestWalk(tx, ty, allowB) {
+  if (robWalk(tx, ty, allowB)) return [tx, ty];
+  let best = null, bd = 1e9;
+  for (let y = ty - 4; y <= ty + 4; y++) for (let x = tx - 4; x <= tx + 4; x++) {
+    if (!robWalk(x, y, allowB)) continue; const d = (x - tx) ** 2 + (y - ty) ** 2; if (d < bd) { bd = d; best = [x, y]; }
+  }
+  return best;
+}
+function bfs(sx, sy, gx, gy, allowB) {
+  const prev = new Int16Array(MW * MH).fill(-1), s = sy * MW + sx, goal = gy * MW + gx, q = [s];
+  prev[s] = s;
+  for (let h = 0; h < q.length; h++) {
+    const c = q[h]; if (c === goal) break;
+    const cx = c % MW, cy = (c / MW) | 0;
+    for (const [dx, dy] of DIRS8) {
+      const nx = cx + dx, ny = cy + dy;
+      if (!robWalk(nx, ny, allowB)) continue;
+      if (dx && dy && (!robWalk(cx + dx, cy, allowB) || !robWalk(cx, cy + dy, allowB))) continue;
+      const ni = ny * MW + nx; if (prev[ni] !== -1) continue;
+      prev[ni] = c; q.push(ni);
+    }
+  }
+  if (prev[goal] === -1) return [];
+  const path = []; let c = goal;
+  while (c !== s) { path.push({ x: tc(c % MW), y: tc((c / MW) | 0) }); c = prev[c]; }
+  return path.reverse();
+}
+function robotGoTo(x, y, allowB) {
+  const g = nearestWalk(Math.floor(x / T), Math.floor(y / T), allowB);
+  if (!g) { robot.path = []; return; }
+  robot.path = bfs(Math.floor(robot.x / T), Math.floor(robot.y / T), g[0], g[1], allowB);
+}
+function followPath(dt, speed) {
+  const R = robot;
+  if (!R.path.length) return true;
+  const p = R.path[0], dx = p.x - R.x, dy = p.y - R.y, d = Math.hypot(dx, dy);
+  turnRobot(Math.atan2(dy, dx), dt * 5);
+  const step = speed * dt;
+  if (d <= step) { R.x = p.x; R.y = p.y; R.path.shift(); } else { R.x += dx / d * step; R.y += dy / d * step; }
+  R.bob += dt * speed * 0.15;
+  return !R.path.length;
+}
+function turnRobot(target, rate) { const d = angDiff(target, robot.a); robot.a += Math.max(-rate, Math.min(rate, d)); }
+
+// ===== Vision =====
+const R_RANGE = 150, R_HALF = 0.62, D_RANGE = 95, D_HALF = 0.55;
+function seesCat(sx, sy, a, range, half, isRobot) {
+  if (cat.carried || zoneAtPx(cat.x, cat.y) === 0) return false;
+  let r = range * (cat.crouch ? 0.68 : 1);
+  if (isRobot && (cat.elev || cat.air > 0)) r = Math.min(r, 42);
+  const dx = cat.x - sx, dy = cat.y - sy, d = Math.hypot(dx, dy);
+  if (d > r) return false;
+  if (Math.abs(angDiff(Math.atan2(dy, dx), a)) > half && d > 22) return false;
+  return los(sx, sy, cat.x, cat.y);
+}
+function conePoly(x, y, a, range, half) {
+  const pts = [[x, y]], N = 26;
+  for (let i = 0; i <= N; i++) {
+    const an = a - half + 2 * half * i / N, cs = Math.cos(an), sn = Math.sin(an);
+    let d = 0; while (d < range) { d += 5; if (wallAt(x + cs * d, y + sn * d)) { d -= 4; break; } }
+    d = Math.min(d, range); pts.push([x + cs * d, y + sn * d]);
+  }
+  return pts;
+}
+
+// ===== Night flow =====
+function topZone(exclude) { const S = zoneSummary().filter(z => z.z !== exclude); return S.length ? S[0].z : 3; }
+function startNight(n, fresh) {
+  night = n; mode = 'scan'; scanT = 0; playT = 0;
+  if (fresh) { for (let i = 0; i < mem.heat.length; i++) mem.heat[i] *= 0.85; }
+  Object.assign(cat, { x: BASKET.x, y: BASKET.y, vx: 0, vy: 0, elev: false, air: 0, hasFish: false, riding: false, carried: false, face: -Math.PI / 2 });
+  Object.assign(fish, { x: FISH_HOME.x, y: FISH_HOME.y, taken: false });
+  Object.assign(toy, { x: tc(9), y: tc(10), vx: 0, vy: 0, cool: 0, pending: false });
+  Object.assign(roomba, { x: ROOMBA_PATH[0].x, y: ROOMBA_PATH[0].y, i: 1, confused: 0, cool: 0 });
+  Object.assign(piano, { play: 0, cool: 0 });
+  const S = zoneSummary();
+  const zw = [0, 1, 1, 1, 1, 1];
+  for (const z of S) zw[z.z] = 1 + 7 * z.share;
+  robot.zoneW = zw;
+  log(`NIGHT ${n} // ${fresh ? 'patrol boot' : 'retry ' + mem.catches + ' logged'}`, 'head');
+  if (!S.length) log('No behavioural data. Default patrol loaded.');
+  else {
+    log(`Pattern: subject prefers ${S[0].name} (${S[0].pct}%). Rerouting patrol.`);
+    if (S[1] && S[1].pct >= 12) log(`Secondary watch: ${S[1].name} (${S[1].pct}%).`);
+  }
+  if (mem.lastLure) {
+    const u = mem.lures[mem.lastLure] || 0;
+    log(u >= LURE_IGNORE ? `Lure '${mem.lastLure}' used ${u}x. Now ignored.` : `Lure '${mem.lastLure}' used ${u}x. Response cut to ${Math.max(1.2, 4.5 - u * 0.8).toFixed(1)}s.`);
+  }
+  lamp = null; drone = null;
+  if (n >= 2) {
+    const z = topZone(0), p = LAMP_AT[z];
+    lamp = { x: tc(p[0]), y: tc(p[1]), r: 72, on: 0, z };
+    log(`Motion lamp installed in ${ZN[z]}.`);
+  }
+  if (n >= 3) {
+    let z = topZone(0); if (lamp && z === lamp.z) z = topZone(z);
+    const d = DRONE_AT[z], cx = tc(d[0]) - T / 2, cy = tc(d[1]) - T / 2;
+    drone = { cx, cy, rx: d[2] * T, ry: d[3] * T, ang: 0, x: cx + d[2] * T, y: cy, a: Math.PI / 2, susp: 0, cool: 0, z };
+    log(`Drone HB-9b deployed over ${ZN[z]}.`);
+  }
+  robot.ignoredLog = {};
+  const far = WPS.filter(w => Math.hypot(w.x - BASKET.x, w.y - BASKET.y) > 220);
+  const wp = pickWeighted(far);
+  Object.assign(robot, { x: wp.x, y: wp.y, state: 'look', wait: 1.2, baseA: Math.random() * 6.28, path: [], susp: 0, lastSeen: null, icon: '', recent: [wp] });
+  if (fresh) robotVoice('start');
+  banner(`NIGHT ${n}`, fresh ? (n === 1 ? 'steal the fish · bring it to your basket' : n === 2 ? 'new: motion lamp' : 'new: patrol drone') : 'the robot remembers', 2.4);
+  SFX.scan();
+  saveMem();
+}
+function pickWeighted(list) {
+  let tot = 0; const ws = list.map(w => { const v = robot.zoneW[w.z] || 1; tot += v; return v; });
+  let r = Math.random() * tot;
+  for (let i = 0; i < list.length; i++) { r -= ws[i]; if (r <= 0) return list[i]; }
+  return list[list.length - 1];
+}
+function nextWaypoint() {
+  const cands = WPS.filter(w => !robot.recent.includes(w) && Math.hypot(w.x - robot.x, w.y - robot.y) > 40);
+  const wp = pickWeighted(cands.length ? cands : WPS);
+  robot.recent.push(wp); if (robot.recent.length > 3) robot.recent.shift();
+  robot.state = 'patrol'; robot.target = wp;
+  robot.linger = 0.8 + 3.2 * Math.min(1, (robot.zoneW[wp.z] - 1) / 4);
+  robotGoTo(wp.x, wp.y, false);
+}
+function beginCatch() {
+  mode = 'caught';
+  mem.catches++;
+  lastCatchZone = ZN[zoneAtPx(cat.x, cat.y)];
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) addHeat(cat.x + dx * T, cat.y + dy * T, dx || dy ? 0.8 : 3);
+  if (cat.air > 0) { cat.air = 0; cat.x = cat.jx1; cat.y = cat.jy1; }
+  cat.riding = false; cat.vx = cat.vy = 0;
+  robot.state = 'grab'; robot.icon = '!'; robot.iconT = 3; robot.repath = 0;
+  log(`Subject detected in ${lastCatchZone}. Initiating gentle retrieval.`, 'warn');
+  robotVoice('catch');
+  SFX.alert(); addShake(6);
+  saveMem();
+}
+function nightClear() {
+  mode = 'clear'; clearT = 2.4; mem.nights++;
+  SFX.clear(); burst(cat.x, cat.y, 30, COL.fish, 140);
+  log(`Fish missing from inventory. Night ${night} lost.`, 'warn');
+  banner(`NIGHT ${night} CLEAR`, night < 3 ? 'the robot is taking notes…' : '', 2.4);
+  saveMem();
+}
+
+// ===== Menu =====
+function enterMenu(msg) {
+  mode = 'menu'; menuMsg = msg || '';
+  Object.assign(cat, { x: BASKET.x + 30, y: BASKET.y, vx: 0, vy: 0, elev: false, air: 0, hasFish: false, riding: false, carried: false });
+  Object.assign(robot, { x: DOCK.x, y: DOCK.y, state: 'sleep', path: [], icon: '', susp: 0, a: -Math.PI / 2 });
+  lamp = null; drone = null; scanT = 99;
+  for (const p of PADS) p.inside = true;
+}
+function updatePads() {
+  for (const p of PADS) {
+    const inside = cat.x > p.x && cat.x < p.x + p.w && cat.y > p.y - 4 && cat.y < p.y + p.h + 4;
+    if (inside && !p.inside) padAction(p);
+    p.inside = inside;
+  }
+}
+function padAction(p) {
+  SFX.pad(); burst(p.x + p.w / 2, p.y + p.h / 2, 14, COL.pad, 90);
+  if (p.act === 'start') { mem.wins = mem.wins || 0; startNight(1, true); }
+  else if (p.act === 'ai') {
+    aiWanted = !aiWanted;
+    if (aiWanted) {
+      if (!sample) log('Voice module: cloud link unavailable. Scripted voice.', 'sys');
+      else log('Voice module: LIVE link requested.', 'sys');
+      robotVoice('boot');
+    } else log('Voice module: scripted mode.', 'sys');
+  } else if (p.act === 'reset') {
+    mem = freshMem(); saveMem(); logs = [];
+    log('MEMORY WIPED. Heatmap zeroed. I remember nothing. Probably.', 'warn');
+    addShake(4);
+  }
+}
+
+// ===== Cat =====
+function bodyHitsWall(x, y) { const r = 7; return wallAt(x - r, y - r) || wallAt(x + r, y - r) || wallAt(x - r, y + r) || wallAt(x + r, y + r); }
+function blocked(x, y) { return bodyHitsWall(x, y) || (!cat.elev && furnAt(x, y)); }
+function tryPounce() {
+  if (cat.air > 0 || cat.pcool > 0) return;
+  const dx = Math.cos(cat.face), dy = Math.sin(cat.face);
+  let best = 0;
+  for (let d = 64; d >= 16 && !best; d -= 4) {
+    const tx = cat.x + dx * d, ty = cat.y + dy * d;
+    if (bodyHitsWall(tx, ty)) continue;
+    let ok = true; for (let s = 4; s < d; s += 4) if (wallAt(cat.x + dx * s, cat.y + dy * s)) { ok = false; break; }
+    if (ok) best = d;
+  }
+  if (!best) return;
+  if (cat.riding) dismount(false);
+  Object.assign(cat, { air: cat.airDur, jx0: cat.x, jy0: cat.y, jx1: cat.x + dx * best, jy1: cat.y + dy * best, pcool: 0.5 });
+  SFX.pounce();
+}
+function dismount(push) {
+  cat.riding = false; roomba.cool = 1.6; roomba.confused = 2.6;
+  if (push) {
+    const nx = cat.x + Math.cos(cat.face) * 20, ny = cat.y + Math.sin(cat.face) * 20;
+    if (!bodyHitsWall(nx, ny) && !furnAt(nx, ny)) { cat.x = nx; cat.y = ny; }
+  }
+  if (mode === 'play') { useLure('roomba'); emitNoise(roomba.x, roomba.y, 8, 'lure', 'roomba'); }
+}
+function useLure(name) { mem.lastLure = name; addHeat(cat.x, cat.y, 0.5); mem.lures[name] = (mem.lures[name] || 0) + 1; }
+function updateCat(dt, jumpPressed) {
+  cat.pcool = Math.max(0, cat.pcool - dt); cat.squash *= Math.pow(0.002, dt);
+  let ix = (input.right ? 1 : 0) - (input.left ? 1 : 0), iy = (input.down ? 1 : 0) - (input.up ? 1 : 0);
+  const im = Math.hypot(ix, iy); if (im) { ix /= im; iy /= im; cat.face = Math.atan2(iy, ix); }
+  cat.crouch = input.crouch && !cat.riding; cat.dash = input.dash && !cat.crouch && im > 0 && !cat.riding;
+  if (jumpPressed) tryPounce();
+  if (cat.air > 0) {
+    cat.air -= dt;
+    const t = 1 - Math.max(0, cat.air) / cat.airDur;
+    cat.x = cat.jx0 + (cat.jx1 - cat.jx0) * t; cat.y = cat.jy0 + (cat.jy1 - cat.jy0) * t;
+    if (cat.air <= 0) {
+      cat.air = 0; cat.elev = furnAt(cat.x, cat.y); cat.squash = 1; SFX.land();
+      burst(cat.x, cat.y + 6, 6, 'rgba(200,220,255,0.6)', 40);
+      if (!cat.elev && mode === 'play') emitNoise(cat.x, cat.y, 1.6, 'step');
+    }
+    return;
+  }
+  if (cat.riding) {
+    cat.x = roomba.x; cat.y = roomba.y - 2; cat.vx = cat.vy = 0; cat.moving = false;
+    if (im) { cat.rideExit += dt; if (cat.rideExit > 0.15) dismount(true); } else cat.rideExit = 0;
+    return;
+  }
+  const sp = cat.crouch ? 50 : cat.dash ? 165 : 96;
+  const k = Math.min(1, dt * 14);
+  cat.vx += (ix * sp - cat.vx) * k; cat.vy += (iy * sp - cat.vy) * k;
+  const nx = cat.x + cat.vx * dt; if (!blocked(nx, cat.y)) cat.x = nx; else cat.vx = 0;
+  const ny = cat.y + cat.vy * dt; if (!blocked(cat.x, ny)) cat.y = ny; else cat.vy = 0;
+  if (cat.elev && !furnAt(cat.x, cat.y)) { cat.elev = false; SFX.land(); }
+  const spd = Math.hypot(cat.vx, cat.vy); cat.moving = spd > 25;
+  if (cat.moving && !cat.crouch) {
+    cat.stepT -= dt;
+    if (cat.stepT <= 0) {
+      cat.stepT = cat.dash ? 0.18 : 0.34;
+      if (mode === 'play') {
+        if (cat.dash) { SFX.dash(); emitNoise(cat.x, cat.y, cat.elev ? 3 : 4.5, 'dash'); burst(cat.x, cat.y + 5, 3, 'rgba(255,190,120,0.6)', 30); }
+        else { SFX.step(); emitNoise(cat.x, cat.y, cat.elev ? 1.1 : 2.1, 'step'); }
+      } else SFX.step();
+    }
+  } else cat.stepT = Math.min(cat.stepT, 0.1);
+}
+
+// ===== Lures & gadgets =====
+function updateRoomba(dt) {
+  roomba.cool = Math.max(0, roomba.cool - dt);
+  if (roomba.confused > 0) {
+    roomba.confused -= dt; roomba.a += dt * 6; roomba.beepT -= dt;
+    if (roomba.beepT <= 0) { roomba.beepT = 0.45; SFX.beep(); }
+    return;
+  }
+  const p = ROOMBA_PATH[roomba.i], dx = p.x - roomba.x, dy = p.y - roomba.y, d = Math.hypot(dx, dy), st = 40 * dt;
+  roomba.a = Math.atan2(dy, dx);
+  if (d <= st) { roomba.x = p.x; roomba.y = p.y; roomba.i = (roomba.i + 1) % ROOMBA_PATH.length; }
+  else { roomba.x += dx / d * st; roomba.y += dy / d * st; }
+}
+function updateLures(dt, live) {
+  updateRoomba(dt);
+  // squeaky toy
+  toy.cool = Math.max(0, toy.cool - dt);
+  const ts = Math.hypot(toy.vx, toy.vy);
+  if (ts > 1) {
+    const f = Math.exp(-2.0 * dt);
+    let nx = toy.x + toy.vx * dt, ny = toy.y;
+    if (wallAt(nx, ny) || furnAt(nx, ny)) { toy.vx *= -0.7; nx = toy.x; SFX.squeak(); } toy.x = nx;
+    ny = toy.y + toy.vy * dt;
+    if (wallAt(toy.x, ny) || furnAt(toy.x, ny)) { toy.vy *= -0.7; ny = toy.y; } toy.y = ny;
+    toy.vx *= f; toy.vy *= f;
+    if (Math.hypot(toy.vx, toy.vy) < 18) {
+      toy.vx = toy.vy = 0;
+      if (toy.pending && live) { toy.pending = false; SFX.squeak(); emitNoise(toy.x, toy.y, 9, 'lure', 'squeaky toy'); burst(toy.x, toy.y, 10, '#ff8fc8', 70); }
+    }
+  }
+  if (!live) return;
+  const onGround = !cat.elev && cat.air <= 0 && !cat.carried;
+  if (onGround && !cat.riding && toy.cool <= 0 && ts < 18 && Math.hypot(cat.x - toy.x, cat.y - toy.y) < 15) {
+    toy.vx = Math.cos(cat.face) * 300; toy.vy = Math.sin(cat.face) * 300; toy.cool = 1.2; toy.pending = true;
+    tone(1100, 0.05, 'square', 0.03); useLure('squeaky toy');
+  }
+  // piano
+  piano.cool = Math.max(0, piano.cool - dt);
+  if (onGround && !cat.riding && piano.cool <= 0 && tch(Math.floor(cat.x / T), Math.floor(cat.y / T)) === 'P') {
+    piano.play = 3; piano.cool = 7; piano.ringT = 0.8; useLure('piano');
+    emitNoise(PIANO.x, PIANO.y, 12, 'lure', 'piano'); addShake(2);
+  }
+  if (piano.play > 0) {
+    piano.play -= dt; piano.noteT -= dt; piano.ringT -= dt;
+    if (piano.noteT <= 0) { piano.noteT = 0.16; SFX.piano(); }
+    if (piano.ringT <= 0) { piano.ringT = 0.8; ring(PIANO.x, PIANO.y, 5 * T, 'rgba(255,90,200,0.6)', 2); }
+  }
+  // roomba boarding
+  if (onGround && !cat.riding && roomba.cool <= 0 && Math.hypot(cat.x - roomba.x, cat.y - roomba.y) < 13) {
+    cat.riding = true; cat.rideExit = 0; SFX.beep(); burst(roomba.x, roomba.y, 6, '#7dffb0', 40);
+  }
+  // motion lamp
+  if (lamp) {
+    lamp.on = Math.max(0, lamp.on - dt);
+    if (lamp.on <= 0 && cat.moving && !cat.crouch && !cat.elev && cat.air <= 0 && !cat.riding && Math.hypot(cat.x - lamp.x, cat.y - lamp.y) < lamp.r) {
+      lamp.on = 4; SFX.lamp(); addHeat(cat.x, cat.y, 1);
+      log(`Motion lamp triggered in ${ZN[lamp.z]}.`, 'warn');
+      emitNoise(lamp.x, lamp.y, 3, 'lamp');
+    }
+  }
+}
+function updateDrone(dt) {
+  if (!drone) return;
+  const D = drone;
+  D.ang += dt * 0.6; D.cool = Math.max(0, D.cool - dt);
+  const nx = D.cx + Math.cos(D.ang) * D.rx, ny = D.cy + Math.sin(D.ang) * D.ry;
+  D.a = Math.atan2(ny - D.y, nx - D.x) + Math.sin(gameT * 1.3) * 0.5; D.x = nx; D.y = ny;
+  if (D.cool > 0 || mode !== 'play') return;
+  if (seesCat(D.x, D.y, D.a, D_RANGE, D_HALF, false)) {
+    D.susp += dt * 1.6; addHeat(cat.x, cat.y, dt * 1.5);
+    if (D.susp >= 1) {
+      D.susp = 0; D.cool = 3; SFX.alert();
+      log(`Drone tag: subject in ${ZN[zoneAtPx(cat.x, cat.y)]}. Dispatching HB-9.`, 'warn');
+      if (robot.state !== 'chase') { robot.state = 'inv'; robot.linger = 2.5; robot.icon = '!'; robot.iconT = 1.5; robot.fast = 1.4; robotGoTo(cat.x, cat.y, false); }
+    }
+  } else D.susp = Math.max(0, D.susp - dt * 0.6);
+}
+
+// ===== Robot =====
+function updateRobot(dt) {
+  const R = robot;
+  R.iconT -= dt; if (R.iconT <= 0) R.icon = '';
+  R.stepLogT -= dt;
+  if (R.state === 'sleep') return;
+  if (R.state === 'grab') {
+    R.repath -= dt; if (R.repath <= 0) { R.repath = 0.3; robotGoTo(cat.x, cat.y, true); }
+    turnRobot(Math.atan2(cat.y - R.y, cat.x - R.x), dt * 6);
+    if (Math.hypot(cat.x - R.x, cat.y - R.y) < 18 || (followPath(dt, 120) && Math.hypot(cat.x - R.x, cat.y - R.y) < 34)) {
+      R.state = 'carry'; cat.carried = true;
+      if (cat.hasFish) { cat.hasFish = false; fish.taken = false; log('Fish recovered. Returning to counter.'); }
+      robotGoTo(BASKET.x, BASKET.y, true); SFX.catch();
+    }
+    return;
+  }
+  if (R.state === 'carry') {
+    const done = followPath(dt, 100);
+    cat.x = R.x; cat.y = R.y - 1;
+    if (done || Math.hypot(R.x - BASKET.x, R.y - BASKET.y) < 8) {
+      R.state = 'drop'; R.wait = 0.9; cat.carried = false; cat.x = BASKET.x; cat.y = BASKET.y; cat.squash = 1;
+      burst(BASKET.x, BASKET.y, 10, '#ffffff', 50); tone(330, 0.2, 'sine', 0.05, 220);
+    }
+    return;
+  }
+  if (R.state === 'drop') { R.wait -= dt; if (R.wait <= 0) startNight(night, false); return; }
+  if (mode !== 'play') return;
+  const seen = seesCat(R.x, R.y, R.a, R_RANGE, R_HALF, true);
+  const d = Math.hypot(cat.x - R.x, cat.y - R.y);
+  if (seen) {
+    R.lastSeen = { x: cat.x, y: cat.y }; addHeat(cat.x, cat.y, dt * 2);
+    R.susp += dt * (0.9 + 2.4 * Math.max(0, 1 - d / R_RANGE)) * (cat.dash ? 1.4 : 1);
+    turnRobot(Math.atan2(cat.y - R.y, cat.x - R.x), dt * 4);
+    if (R.state !== 'chase' && R.susp > 0.3) {
+      R.state = 'chase'; R.repath = 0; R.icon = '!'; R.iconT = 2; SFX.alert(); addShake(3);
+      log(`Visual contact in ${ZN[zoneAtPx(cat.x, cat.y)]}. Approaching.`, 'warn');
+    }
+    if (R.susp >= 1 || d < 20) { beginCatch(); return; }
+  } else {
+    R.susp = Math.max(0, R.susp - dt * 0.2);
+    if (R.state === 'chase') {
+      R.state = 'inv'; R.linger = 2.5; R.icon = '?'; R.iconT = 1.5;
+      log('Contact lost. Searching last known position.');
+      robotGoTo(R.lastSeen.x, R.lastSeen.y, false);
+    }
+  }
+  switch (R.state) {
+    case 'chase':
+      R.repath -= dt; if (R.repath <= 0) { R.repath = 0.3; robotGoTo(cat.x, cat.y, false); }
+      followPath(dt, 98); turnRobot(Math.atan2(cat.y - R.y, cat.x - R.x), dt * 6);
+      break;
+    case 'inv':
+      if (followPath(dt, 80 * (R.fast || 1))) { R.fast = 1; R.state = 'look'; R.wait = R.linger; R.baseA = R.a; }
+      break;
+    case 'patrol':
+      if (followPath(dt, 54)) { R.state = 'look'; R.wait = R.linger; R.baseA = R.a; }
+      break;
+    case 'look':
+      R.wait -= dt;
+      if (!seen) R.a = R.baseA + Math.sin((R.linger - R.wait) * 1.8) * 1.15;
+      if (R.wait <= 0) nextWaypoint();
+      break;
+  }
+}
+
+// ===== Update =====
+function update(dt) {
+  gameT += dt;
+  const jumpPressed = input.jump && !prevJump; prevJump = input.jump;
+  scanT += dt;
+  if (mode === 'menu') { updateCat(dt, jumpPressed); updatePads(); updateRoomba(dt); }
+  else if (mode === 'scan') { updateRoomba(dt); if (scanT > 1.4) mode = 'play'; }
+  else if (mode === 'play') {
+    playT += dt;
+    updateCat(dt, jumpPressed); updateLures(dt, true); updateRobot(dt); updateDrone(dt);
+    if (mode === 'play') {
+      if (!cat.hasFish && !fish.taken && cat.elev && Math.hypot(cat.x - fish.x, cat.y - fish.y) < 20) {
+        cat.hasFish = true; fish.taken = true; SFX.fish(); burst(fish.x, fish.y, 18, COL.fish, 100);
+        log('Counter weight changed: -1 fish. Querying sensors.', 'warn');
+        banner('GOT THE FISH', 'now back to the basket!', 1.6);
+      }
+      if (cat.hasFish && Math.hypot(cat.x - BASKET.x, cat.y - BASKET.y) < 22) nightClear();
+    }
+  } else if (mode === 'caught') { playT += dt; updateLures(dt, false); updateRobot(dt); updateDrone(dt); }
+  else if (mode === 'clear') {
+    clearT -= dt; updateRoomba(dt);
+    if (clearT <= 0) {
+      if (night < 3) startNight(night + 1, true);
+      else { mode = 'won'; wonT = 0; mem.wins = (mem.wins || 0) + 1; saveMem(); robotVoice('win'); banner('ALL 3 FISH STOLEN', 'the house is yours. do not disturb.', 4); SFX.clear(); }
+    }
+  } else if (mode === 'won') {
+    wonT += dt; updateRoomba(dt);
+    if (wonT > 3.5) enterMenu('YOU WIN · walk onto START to play again');
+  }
+  for (const r of rings) { r.r += (r.max - r.r) * Math.min(1, dt * 5) + dt * 20; r.life -= dt * 1.4; }
+  rings = rings.filter(r => r.life > 0);
+  for (const p of parts) { p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.92; p.vy *= 0.92; p.life -= dt; }
+  parts = parts.filter(p => p.life > 0);
+  for (const b of banners) b.t += dt;
+  banners = banners.filter(b => b.t < b.dur);
+  shake *= Math.pow(0.02, dt);
+}
+
+// ===== Static background =====
+const bg = document.createElement('canvas'); bg.width = MAPW; bg.height = H;
+function renderBG() {
+  const g = bg.getContext('2d');
+  const floorCol = ['#1f2a44', '#1a2436', '#21283a', '#1d2b3a', '#1b2435', '#1a2436'];
+  for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
+    const c = tch(x, y), px = x * T, py = y * T, z = zoneOf(x, y);
+    g.fillStyle = floorCol[z];
+    if (z === 3 && (x + y) % 2) g.fillStyle = '#22323f';
+    g.fillRect(px, py, T, T);
+    if (z === 1 || z === 5) { g.fillStyle = 'rgba(255,255,255,0.03)'; g.fillRect(px, py + (x % 2 ? 9 : 21), T, 1); }
+    if (z === 0) { g.fillStyle = 'rgba(255,255,255,0.025)'; g.fillRect(px + 3, py + 3, T - 6, T - 6); }
+    if (z === 4 && x >= 9 && x <= 14 && y >= 10 && y <= 12) { g.fillStyle = '#173a3a'; g.fillRect(px, py, T, T); g.fillStyle = 'rgba(126,230,200,0.08)'; g.fillRect(px, py + 13, T, 3); }
+    if (c === 'P') {
+      g.fillStyle = '#e8eef5'; g.fillRect(px + 1, py + 2, T - 2, T - 6);
+      g.fillStyle = '#9fb0c4'; for (let k = 1; k < 4; k++) g.fillRect(px + k * 7.5, py + 2, 1, T - 6);
+      g.fillStyle = '#0d1018'; g.fillRect(px + 5, py + 2, 4, 13); g.fillRect(px + 19, py + 2, 4, 13);
+    }
+  }
+  for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++) {
+    const c = tch(x, y), px = x * T, py = y * T;
+    if (c === '#') {
+      g.fillStyle = COL.wall; g.fillRect(px, py, T, T);
+      if (tch(x, y + 1) !== '#') { g.fillStyle = COL.wallTop; g.fillRect(px, py + T - 5, T, 5); }
+    } else if (c === 'K') {
+      g.fillStyle = '#2f3d4d'; g.fillRect(px, py, T, T); g.fillStyle = '#4a5d73'; g.fillRect(px + 1, py + 1, T - 2, T - 7);
+      g.fillStyle = 'rgba(200,230,255,0.15)'; g.fillRect(px + 1, py + 1, T - 2, 2);
+    } else if (c === 'F') {
+      g.fillStyle = '#3a2d22'; g.fillRect(px, py, T, T); g.fillStyle = '#56412f'; g.fillRect(px + 1, py + 1, T - 2, T - 5);
+    } else if (c === 'S') {
+      g.fillStyle = '#244a50'; g.fillRect(px, py, T, T); g.fillStyle = '#2f5f66'; g.fillRect(px + 2, py + 2, T - 4, T - 4);
+      g.fillStyle = 'rgba(0,0,0,0.2)'; g.fillRect(px, py + T / 2, T, 1);
+    } else if (c === 'H') {
+      const isPiano = y === 13;
+      g.fillStyle = isPiano ? '#0f1116' : '#33261d'; g.fillRect(px, py, T, T);
+      if (isPiano) { g.fillStyle = 'rgba(180,200,255,0.18)'; g.fillRect(px, py + 3, T, 2); }
+      else { const bc = ['#5a7fa8', '#a85a6e', '#c9a24a', '#5aa88a']; for (let k = 0; k < 5; k++) { g.fillStyle = bc[(x + y + k) % 4]; g.fillRect(px + 3 + k * 5, py + 4, 3, 10); g.fillRect(px + 3 + k * 5, py + 17, 3, 9); } }
+    }
+  }
+  // moonlight from windows
+  g.fillStyle = 'rgba(170,200,255,0.05)';
+  [[6, 1], [9, 1], [1, 7]].forEach(([x, y]) => { g.beginPath(); g.moveTo(x * T, y * T); g.lineTo(x * T + 40, y * T); g.lineTo(x * T + 70, y * T + 80); g.lineTo(x * T + 30, y * T + 80); g.fill(); });
+  // dock
+  g.strokeStyle = 'rgba(94,240,255,0.35)'; g.lineWidth = 2; g.beginPath(); g.arc(DOCK.x, DOCK.y + 4, 13, 0, 6.28); g.stroke();
+}
+
+// ===== Drawing: entities =====
+function drawCat() {
+  if (cat.carried) return;
+  const t = gameT, a = cat.face;
+  let lift = 0; if (cat.air > 0) { const p = 1 - cat.air / cat.airDur; lift = Math.sin(p * Math.PI) * 14; }
+  const el = cat.elev ? 4 : 0;
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.beginPath(); ctx.ellipse(cat.x, cat.y + 5, 10, 5, 0, 0, 6.28); ctx.fill();
+  ctx.translate(cat.x, cat.y - lift - el);
+  const sc = 1 + lift / 40 + (cat.elev ? 0.08 : 0);
+  ctx.scale(sc * (1 + cat.squash * 0.25), sc * (1 - cat.squash * 0.2));
+  ctx.rotate(a);
+  const len = cat.crouch ? 0.8 : cat.dash ? 1.25 : 1, wid = cat.crouch ? 1.15 : cat.dash ? 0.85 : 1;
+  ctx.scale(len, wid);
+  // tail
+  const wag = Math.sin(t * (cat.moving ? 12 : 3)) * 0.6;
+  ctx.strokeStyle = COL.catDark; ctx.lineWidth = 3.2; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(-8, 0); ctx.quadraticCurveTo(-16, wag * 8, -20, wag * 12 + 3); ctx.stroke();
+  // body
+  ctx.fillStyle = COL.cat; ctx.beginPath(); ctx.ellipse(0, 0, 10, 7, 0, 0, 6.28); ctx.fill();
+  ctx.fillStyle = COL.catDark; for (let i = -1; i <= 1; i++) ctx.fillRect(-4 + i * 4, -6.5, 2, 13);
+  // head
+  ctx.fillStyle = COL.cat; ctx.beginPath(); ctx.arc(10, 0, 6.5, 0, 6.28); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(8, -4); ctx.lineTo(10, -10); ctx.lineTo(13, -4); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(8, 4); ctx.lineTo(10, 10); ctx.lineTo(13, 4); ctx.fill();
+  ctx.fillStyle = '#f7c9b0'; ctx.beginPath(); ctx.moveTo(9.5, -5); ctx.lineTo(10.3, -8); ctx.lineTo(11.6, -5); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(9.5, 5); ctx.lineTo(10.3, 8); ctx.lineTo(11.6, 5); ctx.fill();
+  ctx.fillStyle = '#fff0e0'; ctx.beginPath(); ctx.arc(14.5, 0, 2.6, 0, 6.28); ctx.fill();
+  const blink = (t % 3.5) < 0.12;
+  ctx.fillStyle = COL.eye; if (!blink) { ctx.fillRect(12, -3.2, 2.2, 2.2); ctx.fillRect(12, 1.2, 2.2, 2.2); } else { ctx.fillRect(12, -2.6, 2.2, 0.8); ctx.fillRect(12, 1.8, 2.2, 0.8); }
+  if (cat.hasFish) drawFishShape(19, 0, 0.8, 0);
+  ctx.restore();
+  if (cat.crouch && !cat.riding) { ctx.fillStyle = 'rgba(156,245,200,0.7)'; ctx.font = `16px ${FONT_LOG}`; ctx.textAlign = 'center'; ctx.fillText('shh', cat.x, cat.y - 16); }
+}
+function drawFishShape(x, y, s, rot) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot); ctx.scale(s, s);
+  ctx.fillStyle = COL.fish; ctx.beginPath(); ctx.ellipse(0, 0, 8, 4.2, 0, 0, 6.28); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(-6, 0); ctx.lineTo(-12, -5); ctx.lineTo(-12, 5); ctx.fill();
+  ctx.fillStyle = '#0b1422'; ctx.fillRect(4, -1.5, 1.6, 1.6);
+  ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.fillRect(-2, -3, 5, 1);
+  ctx.restore();
+}
+function drawRobot() {
+  const R = robot, x = R.x, y = R.y, hgt = 34, rad = 12;
+  const bob = R.state === 'sleep' ? 0 : Math.sin(R.bob) * 0.8;
+  ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.beginPath(); ctx.ellipse(x, y + 2, 15, 7, 0, 0, 6.28); ctx.fill();
+  const top = y - hgt + bob;
+  const gr = ctx.createLinearGradient(x - rad, 0, x + rad, 0);
+  gr.addColorStop(0, '#7f95a8'); gr.addColorStop(0.45, '#e6f1f7'); gr.addColorStop(1, '#8aa0b2');
+  ctx.fillStyle = gr; ctx.fillRect(x - rad, top, rad * 2, y - top);
+  ctx.beginPath(); ctx.ellipse(x, y, rad, 5, 0, 0, Math.PI); ctx.fill();
+  ctx.fillStyle = '#334255'; ctx.fillRect(x - rad, y - 6, rad * 2, 3);
+  ctx.fillStyle = '#f4fbff'; ctx.beginPath(); ctx.ellipse(x, top, rad, 5, 0, 0, 6.28); ctx.fill();
+  // visor band
+  const cs = Math.cos(R.a), front = Math.sin(R.a) > -0.3;
+  const eyeCol = R.state === 'chase' || R.state === 'grab' ? COL.alert : R.state === 'inv' ? COL.warn : R.state === 'sleep' ? '#335' : COL.accent;
+  ctx.fillStyle = '#0e1a28'; ctx.fillRect(x - rad, top + 7, rad * 2, 7);
+  if (front) {
+    ctx.fillStyle = eyeCol; ctx.shadowColor = eyeCol; ctx.shadowBlur = 8;
+    const ex = x + cs * 7; ctx.fillRect(ex - 4, top + 9, 8, 3); ctx.shadowBlur = 0;
+  } else { ctx.fillStyle = 'rgba(94,240,255,0.25)'; ctx.fillRect(x - 3 + cs * 6, top + 10, 6, 1); }
+  // top sensor & antenna
+  ctx.fillStyle = eyeCol; ctx.beginPath(); ctx.arc(x + cs * 5, top + Math.sin(R.a) * 2, 2.5, 0, 6.28); ctx.fill();
+  ctx.strokeStyle = '#a9bccb'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x - 4, top - 2); ctx.lineTo(x - 6, top - 10); ctx.stroke();
+  ctx.fillStyle = R.state === 'sleep' ? '#456' : (Math.sin(gameT * 6) > 0 ? COL.alert : '#ff9aac'); ctx.beginPath(); ctx.arc(x - 6, top - 11, 2, 0, 6.28); ctx.fill();
+  // suspicion meter
+  if (R.susp > 0.02 && mode === 'play') {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(x - 14, top - 22, 28, 5);
+    ctx.fillStyle = R.susp > 0.6 ? COL.alert : COL.warn; ctx.fillRect(x - 13, top - 21, 26 * Math.min(1, R.susp), 3);
+  }
+  ctx.textAlign = 'center';
+  if (R.icon) { ctx.fillStyle = R.icon === '!' ? COL.alert : COL.warn; ctx.font = `700 20px ${FONT_UI}`; ctx.fillText(R.icon, x + 12, top - 6); }
+  if (R.state === 'sleep') { ctx.fillStyle = COL.dim; ctx.font = `18px ${FONT_LOG}`; ctx.fillText('z', x + 14, top - 4 - (gameT * 8 % 10)); ctx.fillText('Z', x + 20, top - 14 - (gameT * 8 % 10)); }
+  if (R.state === 'carry' || R.state === 'grab' && cat.carried) {
+    // carried cat dangling
+    ctx.save(); ctx.translate(x, top - 6); ctx.rotate(Math.sin(gameT * 5) * 0.15);
+    ctx.fillStyle = COL.cat; ctx.beginPath(); ctx.ellipse(0, 4, 7, 9, 0, 0, 6.28); ctx.fill();
+    ctx.beginPath(); ctx.arc(0, -6, 6, 0, 6.28); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(-5, -9); ctx.lineTo(-4, -15); ctx.lineTo(-1, -10); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(5, -9); ctx.lineTo(4, -15); ctx.lineTo(1, -10); ctx.fill();
+    ctx.fillStyle = COL.eye; ctx.fillRect(-3, -7, 2, 2); ctx.fillRect(1, -7, 2, 2);
+    ctx.strokeStyle = COL.catDark; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(0, 12); ctx.quadraticCurveTo(6, 18, 3, 22); ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = COL.text; ctx.font = `16px ${FONT_LOG}`; ctx.fillText('mrrp?', x + 22, top - 18);
+  }
+}
+function drawCone(x, y, a, range, half, rgb, alpha) {
+  const pts = conePoly(x, y, a, range, half);
+  const g = ctx.createRadialGradient(x, y, 4, x, y, range);
+  g.addColorStop(0, `rgba(${rgb},${alpha})`); g.addColorStop(1, `rgba(${rgb},0.02)`);
+  ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+  for (const p of pts) ctx.lineTo(p[0], p[1]); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = `rgba(${rgb},0.35)`; ctx.lineWidth = 1; ctx.stroke();
+}
+function drawDrone() {
+  const D = drone; if (!D) return;
+  const x = D.x, y = D.y - 22;
+  ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.ellipse(D.x, D.y, 9, 4, 0, 0, 6.28); ctx.fill();
+  ctx.strokeStyle = '#8aa0b2'; ctx.lineWidth = 2;
+  for (const [ox, oy] of [[-8, -6], [8, -6], [-8, 6], [8, 6]]) {
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + ox, y + oy); ctx.stroke();
+    ctx.fillStyle = 'rgba(200,220,240,0.35)'; ctx.beginPath(); ctx.ellipse(x + ox, y + oy, 6, 2 + Math.abs(Math.sin(gameT * 40)) * 1.5, 0, 0, 6.28); ctx.fill();
+  }
+  ctx.fillStyle = '#dfeaf2'; ctx.beginPath(); ctx.arc(x, y, 5, 0, 6.28); ctx.fill();
+  ctx.fillStyle = D.susp > 0.1 ? COL.alert : '#ff9a3c'; ctx.beginPath(); ctx.arc(x + Math.cos(D.a) * 3, y + Math.sin(D.a) * 2, 2, 0, 6.28); ctx.fill();
+}
+function drawProps() {
+  // basket
+  ctx.fillStyle = '#6b4a2b'; ctx.beginPath(); ctx.ellipse(BASKET.x, BASKET.y + 2, 17, 13, 0, 0, 6.28); ctx.fill();
+  ctx.strokeStyle = '#8c6239'; ctx.lineWidth = 1; for (let i = -12; i <= 12; i += 4) { ctx.beginPath(); ctx.moveTo(BASKET.x + i, BASKET.y - 9); ctx.lineTo(BASKET.x + i, BASKET.y + 13); ctx.stroke(); }
+  ctx.fillStyle = '#3f6f8f'; ctx.beginPath(); ctx.ellipse(BASKET.x, BASKET.y, 12, 8.5, 0, 0, 6.28); ctx.fill();
+  if (mode !== 'menu' && cat.hasFish) { ctx.strokeStyle = `rgba(182,240,90,${0.5 + 0.4 * Math.sin(gameT * 6)})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.ellipse(BASKET.x, BASKET.y + 2, 22, 17, 0, 0, 6.28); ctx.stroke(); }
+  // fish
+  if (!fish.taken) {
+    drawFishShape(fish.x, fish.y, 1.1, Math.sin(gameT * 2) * 0.1);
+    if (Math.sin(gameT * 3) > 0.7) { ctx.fillStyle = '#fff'; ctx.fillRect(fish.x + 4, fish.y - 7, 2, 2); }
+    if (mode === 'play' || mode === 'scan') { ctx.fillStyle = COL.fish; ctx.font = `15px ${FONT_LOG}`; ctx.textAlign = 'center'; ctx.fillText('FISH', fish.x, fish.y + 22); }
+  }
+  // gates in menu
+  if (mode === 'menu' || mode === 'won') {
+    ctx.strokeStyle = '#b6f05a'; ctx.lineWidth = 2;
+    for (const [gx, gy] of GATES) { const px = gx * T, py = gy * T; for (let i = 3; i < T; i += 6) { ctx.beginPath(); ctx.moveTo(px + i, py + 2); ctx.lineTo(px + i, py + T - 2); ctx.stroke(); } }
+  }
+  // toy (rubber duck)
+  ctx.fillStyle = '#ff8fc8'; ctx.beginPath(); ctx.arc(toy.x, toy.y, 6, 0, 6.28); ctx.fill();
+  ctx.beginPath(); ctx.arc(toy.x + 4, toy.y - 4, 3.5, 0, 6.28); ctx.fill();
+  ctx.fillStyle = COL.warn; ctx.fillRect(toy.x + 6, toy.y - 5, 3, 2);
+  // roomba
+  ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.arc(roomba.x, roomba.y + 2, 12, 0, 6.28); ctx.fill();
+  ctx.fillStyle = '#2b3442'; ctx.beginPath(); ctx.arc(roomba.x, roomba.y, 11, 0, 6.28); ctx.fill();
+  ctx.strokeStyle = '#4c5b70'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(roomba.x, roomba.y, 7, 0, 6.28); ctx.stroke();
+  ctx.fillStyle = roomba.confused > 0 ? (Math.sin(gameT * 20) > 0 ? COL.alert : '#400') : '#7dffb0';
+  ctx.beginPath(); ctx.arc(roomba.x + Math.cos(roomba.a) * 8, roomba.y + Math.sin(roomba.a) * 8, 2, 0, 6.28); ctx.fill();
+  // lamp
+  if (lamp) {
+    if (lamp.on > 0) {
+      const g = ctx.createRadialGradient(lamp.x, lamp.y, 2, lamp.x, lamp.y, lamp.r * 1.4);
+      g.addColorStop(0, 'rgba(255,209,102,0.45)'); g.addColorStop(1, 'rgba(255,209,102,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(lamp.x, lamp.y, lamp.r * 1.4, 0, 6.28); ctx.fill();
+    } else { ctx.strokeStyle = 'rgba(255,209,102,0.18)'; ctx.setLineDash([4, 5]); ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(lamp.x, lamp.y, lamp.r, 0, 6.28); ctx.stroke(); ctx.setLineDash([]); }
+    ctx.fillStyle = '#2b2b33'; ctx.beginPath(); ctx.arc(lamp.x, lamp.y, 6, 0, 6.28); ctx.fill();
+    ctx.fillStyle = lamp.on > 0 ? '#fff3c4' : '#7a6a3a'; ctx.beginPath(); ctx.arc(lamp.x, lamp.y, 3.5, 0, 6.28); ctx.fill();
+  }
+}
+function drawPads() {
+  for (const p of PADS) {
+    const lit = p.act === 'ai' ? aiWanted : p.inside;
+    ctx.fillStyle = lit ? 'rgba(182,240,90,0.35)' : 'rgba(182,240,90,0.1)';
+    ctx.fillRect(p.x, p.y, p.w, p.h);
+    ctx.strokeStyle = COL.pad; ctx.lineWidth = 2; ctx.globalAlpha = 0.6 + 0.4 * Math.sin(gameT * 3 + p.y); ctx.strokeRect(p.x, p.y, p.w, p.h); ctx.globalAlpha = 1;
+    ctx.fillStyle = COL.pad; ctx.textAlign = 'center';
+    let fs = 13; ctx.font = `700 ${fs}px ${FONT_UI}`;
+    while (ctx.measureText(p.label).width > p.w - 4 && fs > 7) { fs--; ctx.font = `700 ${fs}px ${FONT_UI}`; }
+    ctx.fillText(p.label, p.x + p.w / 2, p.y + p.h / 2 + fs * 0.35);
+  }
+}
+function drawHeat() {
+  let a = 0;
+  if (scanT < 2.6) a = 1; else if (scanT < 3.8) a = 1 - (scanT - 2.6) / 1.2;
+  if (a <= 0 || mode === 'menu') return;
+  let mx = 0; for (const v of mem.heat) mx = Math.max(mx, v);
+  const sweep = Math.min(1, scanT / 1.4) * H;
+  if (mx > 0.05) for (let i = 0; i < mem.heat.length; i++) {
+    const v = mem.heat[i]; if (v <= 0.01) continue;
+    const x = (i % MW) * T, y = ((i / MW) | 0) * T; if (y > sweep) continue;
+    ctx.fillStyle = `rgba(${COL.heat},${(0.08 + 0.5 * Math.sqrt(v / mx)) * a})`; ctx.fillRect(x, y, T, T);
+  }
+  if (scanT < 1.4) {
+    const g = ctx.createLinearGradient(0, sweep - 30, 0, sweep);
+    g.addColorStop(0, 'rgba(94,240,255,0)'); g.addColorStop(1, 'rgba(94,240,255,0.35)');
+    ctx.fillStyle = g; ctx.fillRect(0, sweep - 30, MAPW, 30);
+    ctx.fillStyle = COL.accent; ctx.fillRect(0, sweep - 1, MAPW, 2);
+  }
+  ctx.globalAlpha = a; ctx.fillStyle = COL.accent; ctx.font = `20px ${FONT_LOG}`; ctx.textAlign = 'left';
+  ctx.fillText(mx > 0.05 ? 'HB-9 SCAN // habit heatmap' : 'HB-9 SCAN // no habit data', 8, H - 8); ctx.globalAlpha = 1;
+}
+
+// ===== Drawing: panel =====
+function fitText(text, x, y, maxW) {
+  ctx.save(); const tw = ctx.measureText(text).width;
+  if (tw > maxW) { ctx.translate(x, y); ctx.scale(maxW / tw, 1); ctx.fillText(text, 0, 0); } else ctx.fillText(text, x, y);
+  ctx.restore();
+}
+function wrap(text, w) {
+  const words = text.split(' '), out = []; let cur = '';
+  for (const wd of words) { const t = cur ? cur + ' ' + wd : wd; if (ctx.measureText(t).width > w && cur) { out.push(cur); cur = wd; } else cur = t; }
+  if (cur) out.push(cur); return out;
+}
+function drawPanel() {
+  const X = MAPW;
+  ctx.fillStyle = COL.panel; ctx.fillRect(X, 0, W - X, H);
+  ctx.fillStyle = '#1f3550'; ctx.fillRect(X, 0, 2, H);
+  ctx.textAlign = 'left'; ctx.fillStyle = COL.accent; ctx.font = `700 22px ${FONT_UI}`; ctx.fillText('DO NOT DISTURB', X + 14, 30);
+  const live = aiLive();
+  ctx.font = `700 11px ${FONT_UI}`; const tag = live ? 'AI: live' : 'AI: scripted', tw = ctx.measureText(tag).width + 12;
+  ctx.fillStyle = live ? 'rgba(182,240,90,0.2)' : 'rgba(108,134,166,0.2)'; ctx.fillRect(W - 12 - tw, 16, tw, 18);
+  ctx.fillStyle = live ? COL.pad : COL.dim; ctx.textAlign = 'right'; ctx.fillText(tag, W - 18, 29);
+  ctx.textAlign = 'left'; ctx.font = `500 14px ${FONT_UI}`; ctx.fillStyle = COL.text;
+  if (mode === 'menu') fitText(menuMsg || 'Walk onto a pad in the basket room.', X + 14, 52, W - X - 100);
+  else ctx.fillText(`NIGHT ${night}/3   ·   ${clockStr()}`, X + 14, 52);
+  for (let i = 0; i < 3; i++) {
+    const won = mode !== 'menu' ? i < night - 1 || (i === night - 1 && (mode === 'clear' || mode === 'won')) : false;
+    ctx.globalAlpha = won ? 1 : 0.25; drawFishShape(W - 70 + i * 22, 47, 0.75, 0); ctx.globalAlpha = 1;
+  }
+  ctx.font = `500 13px ${FONT_UI}`; ctx.fillStyle = cat.hasFish ? COL.pad : COL.warn;
+  const goal = mode === 'menu' ? 'GOAL: START · steal fish · return to basket' : cat.hasFish ? 'GOAL: back to your basket!' : 'GOAL: pounce onto the counter, grab the fish';
+  fitText(goal, X + 14, 72, W - X - 28);
+  // robot log
+  const LX = X + 10, LY = 84, LW = W - X - 20, LH = 262;
+  ctx.fillStyle = '#060d17'; ctx.fillRect(LX, LY, LW, LH); ctx.strokeStyle = '#1f3550'; ctx.lineWidth = 1; ctx.strokeRect(LX + 0.5, LY + 0.5, LW - 1, LH - 1);
+  ctx.fillStyle = COL.accent; ctx.font = `20px ${FONT_LOG}`; ctx.fillText('ROBOT LOG // HB-9', LX + 8, LY + 19);
+  ctx.fillStyle = Math.sin(gameT * 4) > 0 ? COL.alert : '#5a1a26'; ctx.beginPath(); ctx.arc(LX + LW - 12, LY + 13, 4, 0, 6.28); ctx.fill();
+  ctx.font = `17px ${FONT_LOG}`;
+  const lines = [];
+  for (let i = logs.length - 1; i >= 0 && lines.length < 16; i--) {
+    const l = logs[i], pre = l.kind === 'ai' ? '» ' : l.t + ' ';
+    const wl = wrap(pre + l.text, LW - 16);
+    for (let j = wl.length - 1; j >= 0; j--) lines.unshift({ s: wl[j], k: l.kind });
+  }
+  const maxL = 13, shown = lines.slice(-maxL);
+  shown.forEach((l, i) => {
+    ctx.fillStyle = l.k === 'ai' ? '#b6f05a' : l.k === 'warn' ? COL.warn : l.k === 'head' ? COL.accent : '#8fb3d6';
+    ctx.fillText(l.s, LX + 8, LY + 40 + i * 17);
+  });
+  // heatmap memory
+  const HY = 368;
+  ctx.fillStyle = COL.text; ctx.font = `700 12px ${FONT_UI}`; ctx.fillText('HEATMAP MEMORY', X + 14, HY);
+  const S = zoneSummary();
+  ctx.font = `17px ${FONT_LOG}`;
+  if (!S.length) { ctx.fillStyle = COL.dim; fitText('empty - the robot knows nothing', X + 14, HY + 20, W - X - 28); }
+  S.slice(0, 4).forEach((z, i) => {
+    const y = HY + 8 + i * 17;
+    ctx.fillStyle = '#8fb3d6'; fitText(z.name, X + 14, y + 12, 98);
+    ctx.fillStyle = '#16253a'; ctx.fillRect(X + 116, y + 3, 128, 9);
+    ctx.fillStyle = `rgba(${COL.heat},0.85)`; ctx.fillRect(X + 116, y + 3, 128 * z.share, 9);
+    ctx.fillStyle = COL.text; ctx.textAlign = 'right'; ctx.fillText(z.pct + '%', W - 14, y + 12); ctx.textAlign = 'left';
+  });
+  ctx.fillStyle = COL.dim; ctx.font = `16px ${FONT_LOG}`;
+  const L = mem.lures;
+  fitText(`catches ${mem.catches} · fish stolen ${mem.nights} · wins ${mem.wins || 0}`, X + 14, 456, W - X - 28);
+  fitText(`lures: toy ${L['squeaky toy'] || 0} · piano ${L.piano || 0} · roomba ${L.roomba || 0}`, X + 14, 473, W - X - 28);
+  ctx.fillStyle = '#1f3550'; ctx.fillRect(X + 10, 484, W - X - 20, 1);
+  ctx.fillStyle = COL.text; ctx.font = `500 11px ${FONT_UI}`;
+  ctx.fillText('Arrows/WASD walk (noise) · Hold C to crouch (silent)', X + 14, 501);
+  ctx.fillText('Shift dash (LOUD) · Space pounce onto furniture', X + 14, 516);
+  ctx.fillText('Step on toy / piano / Roomba to lure the robot', X + 14, 531);
+}
+
+// ===== Draw =====
+function draw() {
+  ctx.fillStyle = COL.panel; ctx.fillRect(0, 0, W, H);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, MAPW, H); ctx.clip();
+  if (shake > 0.3) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+  ctx.drawImage(bg, 0, 0);
+  drawHeat();
+  if (mode === 'menu') drawPads();
+  drawProps();
+  for (const r of rings) { ctx.strokeStyle = r.color; ctx.globalAlpha = Math.max(0, r.life); ctx.lineWidth = r.w; ctx.beginPath(); ctx.arc(r.x, r.y, r.r, 0, 6.28); ctx.stroke(); }
+  ctx.globalAlpha = 1;
+  if (mode === 'play' || mode === 'caught' || mode === 'scan') {
+    ctx.globalCompositeOperation = 'lighter';
+    const R = robot, rgb = R.state === 'chase' || R.state === 'grab' ? '255,77,109' : R.state === 'inv' ? '255,209,102' : '94,240,255';
+    if (R.state !== 'carry' && R.state !== 'drop') drawCone(R.x, R.y, R.a, R_RANGE, R_HALF, rgb, 0.22);
+    if (drone) drawCone(drone.x, drone.y, drone.a, D_RANGE, D_HALF, '255,154,60', 0.2);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  if (cat.y < robot.y) { drawCat(); drawRobot(); } else { drawRobot(); drawCat(); }
+  drawDrone();
+  for (const p of parts) { ctx.globalAlpha = Math.min(1, p.life * 2); ctx.fillStyle = p.color; ctx.fillRect(p.x - 1.5, p.y - 1.5, 3, 3); }
+  ctx.globalAlpha = 1;
+  // night vignette
+  const vg = ctx.createRadialGradient(MAPW / 2, H / 2, 160, MAPW / 2, H / 2, 470);
+  vg.addColorStop(0, 'rgba(2,4,10,0)'); vg.addColorStop(1, 'rgba(2,4,10,0.55)');
+  ctx.fillStyle = vg; ctx.fillRect(0, 0, MAPW, H);
+  if (mode === 'menu') drawMenuOverlay();
+  for (const b of banners) {
+    const a = Math.min(1, b.t * 4, (b.dur - b.t) * 2);
+    ctx.globalAlpha = Math.max(0, a); ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(5,8,15,0.7)'; ctx.fillRect(0, H / 2 - 50, MAPW, 84);
+    ctx.fillStyle = COL.accent; ctx.font = `700 40px ${FONT_UI}`; ctx.fillText(b.text, MAPW / 2, H / 2);
+    if (b.sub) { ctx.fillStyle = COL.text; ctx.font = `500 16px ${FONT_UI}`; ctx.fillText(b.sub, MAPW / 2, H / 2 + 24); }
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+  drawPanel();
+}
+function drawMenuOverlay() {
+  ctx.fillStyle = 'rgba(3,6,12,0.55)';
+  ctx.fillRect(0, 0, MAPW, 11 * T); ctx.fillRect(7 * T, 11 * T, MAPW - 7 * T, H - 11 * T);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = COL.accent; ctx.font = `700 50px ${FONT_UI}`; ctx.fillText('DO NOT DISTURB', MAPW / 2 + 20, 130);
+  ctx.fillStyle = COL.text; ctx.font = `500 17px ${FONT_UI}`;
+  ctx.fillText('A cat. A fish on the counter. A house robot that remembers.', MAPW / 2 + 20, 162);
+  ctx.fillStyle = COL.dim; ctx.font = `500 14px ${FONT_UI}`;
+  ctx.fillText('Steal the fish and return to your basket — three nights in a row.', MAPW / 2 + 20, 190);
+  ctx.fillText('Every time HB-9 sees or hears you, it learns your habits.', MAPW / 2 + 20, 210);
+  ctx.fillStyle = COL.pad; ctx.font = `700 15px ${FONT_UI}`; ctx.textAlign = 'left';
+  const bx = 8 * T, by = 12 * T + 20, bo = Math.sin(gameT * 4) * 4;
+  ctx.fillText('◀ walk onto START', bx + bo, by);
+  ctx.fillStyle = COL.dim; ctx.font = `500 12px ${FONT_UI}`;
+  ctx.fillText('AI ON: robot log voiced live by Claude', bx, by + 60);
+  ctx.fillText('RESET MEMORY: wipe the robot\'s heatmap', bx, by + 120);
+}
+
+// ===== Boot =====
+loadMem();
+renderBG();
+enterMenu();
+log('HB-9 home guardian // standby.', 'head');
+log(zoneSummary().length ? `Habit memory loaded: ${mem.catches} catches on file.` : 'Habit memory: empty.');
+log('Docked. Do not disturb.');
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.033, Math.max(0, (now - last) / 1000)); last = now;
+  update(dt); draw();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>

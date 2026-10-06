@@ -1,0 +1,911 @@
+<title>Dreams of Electric Cats</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bungee&family=VT323&display=swap" rel="stylesheet">
+<style>
+:root{
+  color-scheme: dark;
+  --bg:#03060d; --mint:#8affd0; --amber:#ffc46b; --ink:#cfeee4; --btn:rgba(138,255,208,.14); --btnline:rgba(138,255,208,.45);
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;padding:0;background:var(--bg);color:var(--ink);overflow:hidden}
+body{display:flex;align-items:center;justify-content:center;touch-action:none;-webkit-user-select:none;user-select:none}
+#c{display:block;background:var(--bg);max-width:100%;max-height:100%}
+#touch{position:fixed;left:0;right:0;bottom:0;display:none;justify-content:space-between;padding:10px 12px;pointer-events:none}
+#touch .grp{display:flex;gap:10px;pointer-events:auto}
+#touch button{width:62px;height:62px;border-radius:50%;border:2px solid var(--btnline);background:var(--btn);color:var(--mint);font:22px VT323,"Courier New",monospace;touch-action:none}
+#touch button.on{background:rgba(138,255,208,.35)}
+</style>
+<canvas id="c" width="960" height="540" aria-label="Dreams of Electric Cats game screen"></canvas>
+<div id="touch">
+  <div class="grp"><button data-k="left">&#9664;</button><button data-k="right">&#9654;</button></div>
+  <div class="grp"><button data-k="down">knead</button><button data-k="dash">dash</button><button data-k="jump">&#9650;</button></div>
+</div>
+<script>
+// ===== SETUP =====
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const W = 960, H = 540;
+const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const COL = { bg:'#03060d', mint:'#8affd0', amber:'#ffc46b', coral:'#ff6b6b', ice:'#8fd8ff', lime:'#d4ff6b', gold:'#ffe58a',
+  pink:'#ff9ad5', red:'#ff5470', teal:'#1fb3a6', sand:'#e8c37a', slate:'#a8bdd4', pale:'#eafcff', ink:'#cfeee4', dim:'#2b4d63', heavy:'#e8975a' };
+const FW = 'Bungee, Impact, "Arial Black", sans-serif', FH = 'VT323, "Courier New", monospace';
+function fit() { const s = Math.min(innerWidth / W, innerHeight / H); cv.style.width = (W * s) + 'px'; cv.style.height = (H * s) + 'px'; }
+addEventListener('resize', fit); fit();
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp = (a, b, k) => a + (b - a) * k;
+function rng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function rr(x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+
+// ===== LIVE AI =====
+let sample = null;          // live AI function, or null
+(async () => {
+  try { if (window.claude && window.claude.use) sample = await window.claude.use("sample"); } catch (e) { sample = null; }
+})();
+let aiBusy = false, aiDisabled = false, aiOn = false;
+const AI_OFF_CODES = ["not_granted","sampling_disabled","not_declared","capability_disabled","capability_removed"];
+async function askAI(prompt, fallback) {
+  if (!sample || aiDisabled || aiBusy) return fallback();
+  aiBusy = true;
+  try {
+    const { text } = await sample(prompt, { modelTier: "quick", cache: false });
+    return (text || "").trim() || fallback();
+  } catch (e) {
+    if (AI_OFF_CODES.includes(e && e.code)) { aiDisabled = true; aiOn = false; }
+    return fallback();
+  } finally { aiBusy = false; }
+}
+async function askJSON(prompt) {
+  if (!sample || aiDisabled || aiBusy) return null;
+  aiBusy = true;
+  try {
+    let r;
+    if (typeof sample.json === 'function') r = await sample.json(prompt, { modelTier: "quick", cache: false });
+    else { const res = await sample(prompt, { modelTier: "quick", cache: false }); r = res && res.text; }
+    if (r && typeof r === 'object' && !Array.isArray(r) && !r.word && !r.words) r = r.json || r.data || r.object || r.value || r.text || r;
+    if (typeof r === 'string') { const m = r.match(/\{[\s\S]*\}/); r = m ? JSON.parse(m[0]) : null; }
+    return r && typeof r === 'object' ? r : null;
+  } catch (e) {
+    if (AI_OFF_CODES.includes(e && e.code)) { aiDisabled = true; aiOn = false; }
+    return null;
+  } finally { aiBusy = false; }
+}
+
+// ===== LEXICON =====
+const TAGS = ['water','ground','heavy','light','wind','ice','fire','tiny','giant','prey','exit','enemy','wall'];
+const PROP = ['heavy','light','ice','fire','tiny','giant','wind'];
+const POSES = ['det','adj','noun','verb','prep'];
+const LEXSRC = `det:the,a,an,every,some,this
+adj:heavy/heavy,falling/heavy,light/light,floating/light,angry/wind,wild/wind,calm,sleepy,soft,hungry,electric,cold/ice,frozen/ice,icy/ice,hot/fire,burning/fire,tiny/tiny,small/tiny,giant/giant,huge/giant
+noun:moon/exit,door/exit,window/exit,sea/water,ocean/water,flood/water,rain/water,desert/ground,meadow/ground,street/ground,beach/ground,fish/prey,mouse/prey,bird/prey,dog/enemy,vacuum/enemy,cloud/light,feather/light,balloon/light,stone/heavy,anchor/heavy,storm/wind,fire/fire,sun/fire,ice/ice,snow/ice,wall/wall,tower/wall,path,bridge,stairs,cat,robot,yarn
+verb:sinks/heavy,falls/heavy,floats/light,flies/light,rises/light,burns/fire,freezes/ice,howls/wind,swims/water,drowns/water,carries/light,drinks,sleeps,dreams,guards,hides,climb,climbs,leads,eats,hums
+prep:into,above,under,beside,toward,beneath,past,to,over,through,below`;
+const LEX = {}, BYPOS = {};
+LEXSRC.split('\n').forEach(line => {
+  const [pos, list] = line.split(':');
+  BYPOS[pos] = [];
+  list.split(',').forEach(e => { const [w, ...tg] = e.split('/'); LEX[w] = { pos, tags: tg }; BYPOS[pos].push(w); });
+});
+const EXITS = ['moon','door','window'];
+const TAGWORD = { heavy:'sinks', light:'floats', wind:'gusty', ice:'slippery', fire:'burns', tiny:'tiny', giant:'giant', prey:'prey', exit:'exit',
+  enemy:'guarded', water:'floods', ground:'ground', wall:'wall' };
+
+// ===== DREAMS =====
+const DREAMS = [
+  { s:'the heavy moon sinks into the sea', ys:[330,300,300,300,330,310,340], prey:0,
+    pools:{1:['heavy','light','floating','cold'],3:['sinks','floats','sleeps'],6:['sea','desert','meadow','ocean']},
+    hint:'mmm... the moon is so heavy tonight... it keeps sinking...' },
+  { s:'the dog guards a tiny window', ys:[330,300,290,310,280,280], prey:1,
+    pools:{1:['dog','fish','vacuum','cat'],2:['guards','sleeps','floats'],4:['tiny','giant','small','huge']},
+    hint:'a dog guards my window... and I am so hungry... and so tiny...' },
+  { s:'burning stairs climb an ice wall to the moon', ys:[320,300,270,290,310,330,300,280,260], prey:0,
+    pools:{0:['burning','cold','sleepy','hot'],4:['ice','calm','frozen','giant'],5:['wall','tower','path','cloud']},
+    hint:'hot stairs... a wall of ice... cats can dash right through dreams...' },
+  { s:'the angry storm drowns a fish below the window', ys:[320,290,270,300,320,290,300,280,250], prey:1,
+    pools:{1:['angry','calm','wild','sleepy'],2:['storm','cloud','snow','feather'],3:['drowns','carries','freezes','sleeps']},
+    hint:'so windy... hold on to the fish... do not fall in the sea...' },
+  { s:'giant vacuum drinks hot sea under the heavy moon', ys:[310,280,270,290,300,285,300,280,270], prey:1,
+    pools:{0:['giant','tiny','huge'],1:['vacuum','fish','dog','cloud'],2:['drinks','floats','sleeps'],3:['hot','frozen','cold','calm'],7:['heavy','light','floating']},
+    hint:'the vacuum drinks the boiling sea... the moon is drowning...' },
+];
+const ROOM = { room:1, ground:1, gap:120, x0:110, ys:[400,380,360,390],
+  words:[{w:'dream',fixed:1},{w:'sleep',pad:'sleep',pool:['sleep','nap','doze','snooze','purr']},{w:'ai',pad:'ai',fixed:1},{w:'start',pad:'start',fixed:1}] };
+const ENDING = { room:1, ground:1, gap:70, x0:70, ys:[390,360,330,300,330,370],
+  words:[{w:'the',fixed:1},{w:'robot',fixed:1},{w:'woke',fixed:1},{w:'up',fixed:1},{w:'purring',fixed:1},{w:'again',pad:'again',fixed:1}] };
+const MUMBLES = ['zzz... recharge... purr... recharge...','the letters taste like static...','beep... I mean... meow...',
+  'do androids dream of... no... cats...','five more minutes of dreaming...','my battery is full of fish...','error 404: tail not found...',
+  'the moon was a button all along...','warm laptop... warm laptop...','knead the words... soft... softer...','every word is a little bed...',
+  'I dreamt in lowercase again...','zz... reorganize... the... ocean...','do not wake me... I am almost a cat...','running dream.exe... purring...',
+  'who left this sentence here...','sixteen bits of whisker...','the vacuum is my mother... no...'];
+const WAKE_LINES = ['huh? wha-... oh. back to sleep...','*fan whirs* ...was I a cat?...','five more minutes... please...','who moved my dream...',
+  'mmh... scrambling... the... words...','zz-- system resumed. sleeping.'];
+const END_LINES = ['I dreamt I was a cat. Now my fans purr when I think about fish.','Good morning. I have a strong urge to knead my keyboard.',
+  'I woke up. Some words are still warm.','Five dreams, one cat. I would like to sleep again.','I remember being soft. I remember the moon.'];
+const pick = a => a[(Math.random() * a.length) | 0];
+
+// ===== AUDIO =====
+let AC = null, MG = null, DL = null, NB = null;
+function initAudio() {
+  if (AC) { if (AC.state === 'suspended') AC.resume(); return; }
+  try {
+    AC = new (window.AudioContext || window.webkitAudioContext)();
+    MG = AC.createGain(); MG.gain.value = 0.5; MG.connect(AC.destination);
+    DL = AC.createDelay(1); DL.delayTime.value = 0.31;
+    const fb = AC.createGain(); fb.gain.value = 0.38; const lp = AC.createBiquadFilter(); lp.frequency.value = 2200;
+    const wet = AC.createGain(); wet.gain.value = 0.4;
+    DL.connect(lp); lp.connect(fb); fb.connect(DL); lp.connect(wet); wet.connect(MG);
+    const dg = AC.createGain(); dg.gain.value = 0.03; dg.connect(MG);
+    [55, 82.6, 110.3].forEach((f, i) => { const o = AC.createOscillator(); o.type = 'sine'; o.frequency.value = f; const g = AC.createGain(); g.gain.value = 0.5;
+      const l = AC.createOscillator(); l.frequency.value = 0.07 + i * 0.05; const lg = AC.createGain(); lg.gain.value = 0.45; l.connect(lg); lg.connect(g.gain); l.start();
+      o.connect(g); g.connect(dg); o.start(); });
+  } catch (e) { AC = null; }
+}
+function tone(f, dur, o = {}) {
+  if (!AC) return;
+  const t = AC.currentTime + (o.when || 0), os = AC.createOscillator(), g = AC.createGain();
+  os.type = o.type || 'triangle'; os.frequency.setValueAtTime(f, t);
+  if (o.slide) os.frequency.exponentialRampToValueAtTime(Math.max(20, f * o.slide), t + dur);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(o.vol || 0.12, t + (o.attack || 0.006)); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  os.connect(g); g.connect(MG); if (o.echo !== false) g.connect(DL); os.start(t); os.stop(t + dur + 0.05);
+}
+function noise(dur, o = {}) {
+  if (!AC) return;
+  if (!NB) { NB = AC.createBuffer(1, AC.sampleRate, AC.sampleRate); const d = NB.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1; }
+  const t = AC.currentTime + (o.when || 0), s = AC.createBufferSource(); s.buffer = NB; s.loop = true;
+  const f = AC.createBiquadFilter(); f.type = o.type || 'bandpass'; f.frequency.setValueAtTime(o.freq || 1200, t); f.Q.value = o.q || 1;
+  if (o.slide) f.frequency.exponentialRampToValueAtTime((o.freq || 1200) * o.slide, t + dur);
+  const g = AC.createGain(); g.gain.setValueAtTime(o.vol || 0.15, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  s.connect(f); f.connect(g); g.connect(MG); if (o.echo) g.connect(DL); s.start(t); s.stop(t + dur + 0.05);
+}
+const PENTA = [0, 2, 4, 7, 9];
+function wordFreq(w) {
+  let h = 7; for (const c of w.str) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  const deg = h % 10; let s = PENTA[deg % 5] + 12 * Math.floor(deg / 5);
+  if (w.eff && w.eff.has('heavy')) s -= 12; if (w.eff && w.eff.has('light')) s += 12;
+  return 261.63 * Math.pow(2, s / 12);
+}
+function ringWord(w, vol = 0.11, when = 0) { const f = wordFreq(w); tone(f, 1.1, { vol, when }); tone(f * 2, 0.5, { type: 'sine', vol: vol * 0.35, when }); w.ring = 1; }
+const SFX = {
+  jump: () => tone(520, 0.12, { type: 'square', vol: 0.03, slide: 1.6, echo: false }),
+  dash: () => noise(0.22, { freq: 600, slide: 5, vol: 0.18, q: 0.7 }),
+  shatter: () => { noise(0.4, { freq: 5000, q: 3, vol: 0.15, type: 'highpass' }); for (let i = 0; i < 5; i++) tone(1800 + Math.random() * 2400, 0.25, { type: 'sine', vol: 0.04, when: i * 0.03 }); },
+  glitch: () => { for (let i = 0; i < 7; i++) tone(200 + Math.random() * 1200, 0.05, { type: 'square', vol: 0.035, when: i * 0.07, echo: false }); },
+  knead: (n) => tone(90 + (n % 2) * 18, 0.08, { type: 'sine', vol: 0.12, echo: false }),
+  fizz: () => noise(0.25, { freq: 300, vol: 0.12 }),
+  splash: () => { noise(0.6, { freq: 900, slide: 0.2, vol: 0.3, type: 'lowpass' }); tone(300, 0.3, { type: 'sine', slide: 0.4, vol: 0.08 }); },
+  hurt: () => { tone(700, 0.18, { type: 'sawtooth', slide: 0.5, vol: 0.06 }); tone(940, 0.14, { type: 'square', slide: 0.6, vol: 0.03 }); },
+  hiss: () => noise(0.5, { freq: 3000, vol: 0.12, type: 'highpass' }),
+  stomp: () => tone(160, 0.15, { type: 'square', slide: 0.5, vol: 0.08 }),
+  collect: () => [0, 4, 7, 12].forEach((s, i) => tone(523 * Math.pow(2, s / 12), 0.35, { vol: 0.09, when: i * 0.07 })),
+  pad: () => [0, 7].forEach((s, i) => tone(392 * Math.pow(2, s / 12), 0.4, { vol: 0.1, when: i * 0.08 })),
+  wake: () => { noise(0.8, { freq: 200, slide: 8, vol: 0.2 }); tone(110, 0.9, { type: 'sawtooth', slide: 2, vol: 0.05 }); },
+  win: () => words.forEach((w, i) => ringWord(w, 0.09, i * 0.13)),
+};
+
+// ===== INPUT =====
+const K = { left: 0, right: 0, jump: 0, down: 0, dash: 0 }, KP = {};
+const KEYMAP = { ArrowLeft:'left', KeyA:'left', ArrowRight:'right', KeyD:'right', ArrowUp:'jump', KeyW:'jump', Space:'jump',
+  ArrowDown:'down', KeyS:'down', ShiftLeft:'dash', ShiftRight:'dash', KeyK:'dash' };
+addEventListener('keydown', e => { const k = KEYMAP[e.code]; if (k) { e.preventDefault(); if (!K[k]) KP[k] = 1; K[k] = 1; initAudio(); } });
+addEventListener('keyup', e => { const k = KEYMAP[e.code]; if (k) { e.preventDefault(); K[k] = 0; } });
+addEventListener('blur', () => { for (const k in K) K[k] = 0; });
+if (matchMedia('(pointer: coarse)').matches) {
+  const tc = document.getElementById('touch'); tc.style.display = 'flex';
+  tc.querySelectorAll('button').forEach(b => {
+    const k = b.dataset.k;
+    const on = e => { e.preventDefault(); if (!K[k]) KP[k] = 1; K[k] = 1; b.classList.add('on'); initAudio(); };
+    const off = e => { e.preventDefault(); K[k] = 0; b.classList.remove('on'); };
+    b.addEventListener('pointerdown', on); b.addEventListener('pointerup', off); b.addEventListener('pointercancel', off); b.addEventListener('pointerleave', off);
+  });
+}
+
+// ===== STATE =====
+let mode = 'room', spec = null, dreamIdx = 0, words = [], worldW = W, camX = 0, T = 0;
+let stab = 100, collected = 0, needPrey = 0, modeT = 0, intro = 0;
+let waterY = 640, floorY = 640, waterOn = false, boiling = false, groundOn = false, groundIce = false, windOn = false, windDir = 1, windT = 0;
+let msg = { text: '', t: 0, col: COL.pale }, mumble = { text: '', t: 0 }, shake = 0, flash = 0, robotWake = 0;
+let pendingStart = 0, particles = [], floaters = [], stats = { kneads: 0, reshuffles: 0, ai: 0, t0: 0 };
+const aiDreams = {};
+const P = { x: 0, y: 0, w: 22, h: 20, vx: 0, vy: 0, on: null, onFloor: false, grounded: false, face: 1, coyote: 0, buf: 0, dashT: 0, dashCD: 0, canDash: true,
+  dvx: 0, dvy: 0, kneadT: 0, kneadLock: false, inv: 0, sq: 0, heat: 0, crouch: false, run: 0, check: 0, checkU: 0.5, wrapT: 0 };
+function say(text, col = COL.pale, t = 2.6) { msg = { text, t, col }; }
+function mumbleSay(text) { mumble = { text, t: 6 }; }
+function floater(x, y, text, col) { floaters.push({ x, y, text, col, life: 1.4 }); }
+function burst(x, y, n, col, sp = 160, opts = {}) {
+  for (let i = 0; i < n; i++) { const a = Math.random() * Math.PI * 2, s = sp * (0.3 + Math.random());
+    particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - (opts.up || 0), life: opts.life || (0.5 + Math.random() * 0.5), max: 1, col, size: opts.size || 2 + Math.random() * 2, ch: opts.ch ? pick(opts.ch) : null, g: opts.g ?? 300 }); }
+}
+
+// ===== WORDS & LAYOUT =====
+function lexOf(w) { return LEX[w] || { pos: 'noun', tags: [] }; }
+function makeWord(o, i, sp, r) {
+  const lx = lexOf(o.w);
+  const wd = { str: o.w, pos: o.pos || lx.pos, tags: (o.tags || lx.tags).slice(), fixed: !!o.fixed, pad: o.pad || null, zz: !!o.zz, idx: i,
+    base: o.base, base0: o.base, gap: o.gap || sp.gap || 72, x: 0, y: 0, w: 0, h: 0, py: 0, tx: 0, ty: 0, tw: 0, th: 0, dx: 0, dy: 0, sink: 0, shatter: 0,
+    scr: null, ring: 0, ph: Math.random() * 6, appear: 0.2 + i * 0.16, alpha: 0, preyTaken: false, en: null, kneads: 0, pi: 0, ai: false, heat: 0, eff: new Set() };
+  if (o.pool) wd.pool = o.pool.slice();
+  else if (wd.tags.includes('exit')) { const k = EXITS.indexOf(o.w); wd.pool = k >= 0 ? EXITS.slice(k).concat(EXITS.slice(0, k)) : [o.w].concat(EXITS); }
+  else {
+    const cands = (BYPOS[wd.pos] || BYPOS.noun).filter(x => x !== o.w && !EXITS.includes(x));
+    wd.pool = [o.w]; while (wd.pool.length < 4 && cands.length) wd.pool.push(cands.splice((r() * cands.length) | 0, 1)[0]);
+  }
+  return wd;
+}
+function computeEff() {
+  words.forEach(w => { w.eff = new Set(w.tags); });
+  words.forEach((w, i) => {
+    if (w.pos !== 'adj') return;
+    for (let j = i + 1; j < words.length; j++) {
+      const n = words[j]; if (n.pos === 'noun') { PROP.forEach(p => { if (w.tags.includes(p)) n.eff.add(p); }); break; }
+      if (n.pos !== 'adj' && n.pos !== 'det') break;
+    }
+  });
+  words.forEach(w => { const e = w.eff;
+    if (e.has('heavy') && e.has('light')) { e.delete('heavy'); e.delete('light'); }
+    if (e.has('tiny') && e.has('giant')) { e.delete('tiny'); e.delete('giant'); } });
+  waterOn = false; boiling = false; groundIce = false; windOn = false; groundOn = !!(spec && spec.ground);
+  words.forEach(w => { const e = w.eff;
+    if (e.has('water')) { if (e.has('ice')) { groundOn = true; groundIce = true; } else { waterOn = true; if (e.has('fire')) boiling = true; } }
+    if (e.has('ground')) groundOn = true;
+    if (e.has('wind')) windOn = true; });
+}
+function dims(w) {
+  const e = w.eff, len = Math.max(1, w.str.length);
+  if (e.has('wall')) { const f = 44, cap = f * 0.74; return { f, cap, vert: true, w: f * 0.7 + 14, h: len * cap * 1.38 + 10 }; }
+  const f = e.has('giant') ? 58 : e.has('tiny') ? 22 : 38, cap = f * 0.74, cell = f * 0.68;
+  return { f, cap, vert: false, w: len * cell + 14, h: cap + 8 };
+}
+function layout() {
+  computeEff();
+  let x = spec.x0 || 70;
+  words.forEach(w => {
+    const d = dims(w); w.d = d; w.tw = d.w; w.th = d.h;
+    let y = w.base;
+    if (w.pos === 'noun') { if (w.eff.has('heavy')) y += 120; if (w.eff.has('light')) y -= 80; }
+    if (d.vert) y = y + 36 - d.h;
+    w.ty = y; w.tx = x; x += d.w + w.gap;
+    if (w.eff.has('enemy') && !w.en) w.en = { u: 0.5, dir: 1, stun: 0 };
+    if (!w.eff.has('enemy')) w.en = null;
+  });
+  worldW = Math.max(W, x + 60);
+}
+function loadSpec(sp, isDream) {
+  spec = sp; const r = rng(sp.seed || 99);
+  const list = sp.words.map((o, i) => Object.assign({}, o, { base: sp.ys[i] }));
+  if (isDream) list.unshift({ w: 'zz', fixed: 1, zz: 1, base: 285, pos: 'x', tags: [], gap: 70 });
+  words = list.map((o, i) => makeWord(o, i, sp, r));
+  words[0].appear = 0; words[0].alpha = 1;
+  layout();
+  words.forEach(w => { w.x = w.tx; w.y = w.ty; w.w = w.tw; w.h = w.th; w.py = w.y; });
+  waterY = waterOn ? (boiling ? 320 : 400) : 640; floorY = groundOn && !waterOn ? 470 : 640;
+  particles = []; collected = 0; needPrey = sp.prey || 0; stab = 100; intro = 0; modeT = 0;
+  P.check = 0; P.checkU = 0.5; respawn(true); camX = clamp(P.x - W * 0.35, 0, worldW - W);
+}
+function sentenceOf(ws) { return ws.filter(w => !w.zz).map(w => w.str).join(' '); }
+function setWord(w, r) {
+  w.str = r.str.toLowerCase(); w.pos = r.pos || w.pos; w.tags = r.tags.filter(t => TAGS.includes(t)); w.ai = !!r.ai;
+  w.preyTaken = false; w.en = null; w.sink = 0; w.heat = 0;
+  layout(); ringWord(w, 0.13);
+  const cx = w.x + w.w / 2;
+  burst(cx, w.py + w.h / 2, 26, colorOf(w), 200, { ch: w.str.toUpperCase().split(''), size: 12, g: 60, life: 1 });
+  floater(cx, w.py - 30, (r.ai ? '✦ ' : '') + w.str.toUpperCase() + (w.eff.size ? ' · ' + [...w.eff].map(t => TAGWORD[t]).join(' · ') : ''), r.ai ? COL.pink : colorOf(w));
+  if (w.eff.has('water') && !w.eff.has('ice')) say('the dream floods!', COL.teal);
+  else if (w.eff.has('water') && w.eff.has('ice')) say('the sea freezes solid', COL.ice);
+  else if (w.eff.has('ground')) say('solid ground below', COL.sand);
+}
+function colorOf(w) {
+  const e = w.eff;
+  if (w.pad === 'start') return COL.gold; if (w.pad === 'ai') return aiOn ? COL.lime : COL.slate; if (w.pad === 'again') return COL.gold;
+  if (w.zz) return COL.slate;
+  if (e.has('exit')) return COL.gold; if (e.has('enemy')) return COL.red; if (e.has('prey')) return COL.pink; if (e.has('fire')) return COL.coral;
+  if (e.has('ice')) return COL.ice; if (e.has('wind')) return COL.lime; if (e.has('water')) return COL.teal; if (e.has('ground')) return COL.sand;
+  if (e.has('wall')) return COL.slate; if (e.has('heavy')) return COL.heavy; if (e.has('light')) return COL.pale; return COL.mint;
+}
+
+// ===== KNEADING & AI WORDS =====
+function knead(w) {
+  if (w.fixed) { SFX.fizz(); floater(w.x + w.w / 2, w.py - 20, w.zz ? 'zZ... (that is a snore)' : 'it will not budge', COL.slate); return; }
+  w.kneads++; stats.kneads++;
+  w.pi = (w.pi + 1) % w.pool.length;
+  const nw = w.pool[w.pi], lx = lexOf(nw);
+  const scripted = { str: nw, pos: lx.pos === w.pos ? lx.pos : w.pos, tags: lx.tags.slice() };
+  const useAI = aiOn && sample && !aiDisabled && !aiBusy && !spec.room && w.kneads % 2 === 1;
+  const token = Math.random();
+  w.scr = { t: 0, from: w.str, result: useAI ? null : scripted, token, ai: useAI };
+  SFX.glitch(); shake = Math.max(shake, 3);
+  if (useAI) { w.pi = (w.pi - 1 + w.pool.length) % w.pool.length; requestKneadAI(w, scripted, token); }
+}
+async function requestKneadAI(w, scripted, token) {
+  const isExit = w.tags.includes('exit');
+  const others = sentenceOf(words);
+  const prompt = `A sleeping robot dreams it is a cat. The dream is a sentence and every word is a platform; tags give words physics.
+Sentence: "${others}". Replace word #${w.idx} ("${w.str}", a ${w.pos}) with a different, surreal but fitting ${w.pos}${isExit ? ' that is a way out (door, moon, gate...)' : ''}.
+Allowed tags: ${TAGS.filter(t => t !== 'exit').join(', ')}. (water=floods the dream, ground=adds a floor, heavy=sinks, light=floats up, wind=gusts, ice=slippery, fire=burns, tiny/giant=size, prey=a fish to catch, enemy=a patrolling guard, wall=tall pillar). Use 0-2 tags that match the meaning.
+Reply JSON only: {"word":"...","tags":["..."]}`;
+  const r = await askJSON(prompt);
+  if (!w.scr || w.scr.token !== token) return;
+  let ok = null;
+  if (r && typeof r.word === 'string') {
+    const word = r.word.trim().toLowerCase();
+    if (/^[a-z]{2,9}$/.test(word) && word !== w.str) {
+      let tags = Array.isArray(r.tags) ? r.tags.map(t => String(t).toLowerCase()).filter(t => TAGS.includes(t) && t !== 'exit') : [];
+      tags = [...new Set(tags)].slice(0, 3); if (isExit) tags.push('exit');
+      ok = { str: word, pos: w.pos, tags, ai: true }; stats.ai++;
+    }
+  }
+  w.scr.result = ok || (() => { w.pi = (w.pi + 1) % w.pool.length; const lx = lexOf(w.pool[w.pi]); return { str: w.pool[w.pi], pos: w.pos, tags: lx.tags.slice() }; })();
+}
+async function requestAIDream(idx) {
+  if (!aiOn || !sample || aiDisabled || aiDreams[idx]) return;
+  const needP = DREAMS[idx].prey;
+  const prompt = `A sleeping robot dreams it is a cat. Invent one surreal dream sentence of 5-9 words (lowercase, letters only, max 9 letters each). Each word becomes a floating platform; tags give words physics.
+Allowed tags: ${TAGS.join(', ')} (water=floods, ground=floor, heavy=sinks, light=floats up, wind=gusts, ice=slippery, fire=burns, tiny/giant=size, prey=fish to catch, exit=the way out, enemy=patrolling guard, wall=tall pillar).
+Exactly one noun (not among the first two words) must be tagged "exit" (door, moon, window...).${needP ? ' Include one word tagged "prey".' : ''} Adjectives pass their tags to the next noun. pos is one of det, adj, noun, verb, prep.
+Reply JSON only: {"words":[{"w":"the","pos":"det","tags":[]}],"mumble":"sleepy robot sleep-talk, max 60 chars"}`;
+  const r = await askJSON(prompt);
+  const v = validateDream(r);
+  if (v) aiDreams[idx] = v;
+}
+function validateDream(r) {
+  if (!r || !Array.isArray(r.words) || r.words.length < 5 || r.words.length > 9) return null;
+  const out = []; let exitAt = -1, hasPrey = false;
+  for (let i = 0; i < r.words.length; i++) {
+    const o = r.words[i]; if (!o || typeof o.w !== 'string') return null;
+    const w = o.w.trim().toLowerCase(); if (!/^[a-z]{1,9}$/.test(w)) return null;
+    let pos = String(o.pos || '').toLowerCase(); if (!POSES.includes(pos)) pos = lexOf(w).pos;
+    let tags = Array.isArray(o.tags) ? [...new Set(o.tags.map(t => String(t).toLowerCase()).filter(t => TAGS.includes(t)))].slice(0, 3) : [];
+    if (tags.includes('exit')) { if (exitAt >= 0) tags = tags.filter(t => t !== 'exit'); else exitAt = i; }
+    if (tags.includes('prey')) hasPrey = true;
+    out.push({ w, pos, tags });
+  }
+  if (exitAt < 2) return null;
+  const rr2 = rng(out.length * 977 + out[0].w.length); let y = 320; const ys = out.map((_, i) => { if (i) y = clamp(y + (rr2() * 70 - 40), 250, 340); return Math.round(y); });
+  const mum = typeof r.mumble === 'string' ? r.mumble.replace(/[^\x20-\x7e]/g, '').slice(0, 70) : '';
+  return { words: out, ys, prey: hasPrey ? 1 : 0, hint: mum || pick(MUMBLES), ai: true, seed: 7 + out.length };
+}
+
+// ===== MODES =====
+function enterRoom() { mode = 'room'; loadSpec(ROOM, false); mumbleSay('zzz... step on START to fall asleep...'); }
+function startGame() { stats = { kneads: 0, reshuffles: 0, ai: 0, t0: T }; dreamIdx = 0; loadDream(); }
+function loadDream() {
+  mode = 'dream';
+  let sp = DREAMS[dreamIdx];
+  const base = { words: sp.s.split(' ').map((w, i) => ({ w, pool: sp.pools[i] })), ys: sp.ys, prey: sp.prey, hint: sp.hint, seed: dreamIdx * 31 + 5 };
+  let use = base;
+  if (aiOn && aiDreams[dreamIdx]) { use = aiDreams[dreamIdx]; }
+  spec = use; loadSpec(use, true);
+  mumbleSay(use.hint);
+  if (use.ai) say('✦ the AI dreamt this sentence', COL.pink, 3.2);
+  if (aiOn && (dreamIdx === 0 || dreamIdx === 2)) requestAIDream(dreamIdx + 1);
+}
+function clearDream() {
+  mode = 'clear'; modeT = 0; SFX.win(); flash = 0.5;
+  burst(P.x + P.w / 2, P.y, 40, COL.gold, 260, { ch: ['*', '+', '✦'], size: 14, g: 0 });
+}
+function enterEnding() {
+  mode = 'ending'; loadSpec(ENDING, false); robotWake = 99; SFX.wake();
+  mumbleSay(pick(END_LINES));
+  if (aiOn) askAI(`You are a robot who just woke up from five dreams of being a cat (you kneaded words, chased fish, reached the moon). Say ONE short waking thought, max 90 chars, no quotes.`, () => pick(END_LINES))
+    .then(s => { if (mode === 'ending') mumbleSay(s.replace(/^["']|["']$/g, '').slice(0, 90)); });
+}
+function halfWake() {
+  stats.reshuffles++; robotWake = 1.8; flash = 0.8; shake = 14; SFX.wake();
+  say('the robot half-wakes... the dream reshuffles', COL.coral, 3);
+  mumbleSay(pick(WAKE_LINES));
+  const sp = spec; const r = rng(Math.random() * 1e9 | 0);
+  words.forEach(w => { if (w.zz) return; w.base = w.base0 - r() * 25; w.kneads = 0; });
+  words.forEach((w, i) => { if (w.zz) return; const o = sp.words[i - 1]; if (w.str !== o.w) { w.pi = 0; w.scr = { t: 0, from: w.str, result: { str: o.w, pos: o.pos || lexOf(o.w).pos, tags: (o.tags || lexOf(o.w).tags).slice() }, token: 0 }; } });
+  layout(); stab = 100; collected = 0; words.forEach(w => w.preyTaken = false);
+  P.check = 0; respawn(true);
+}
+function toggleAI() {
+  if (!sample || aiDisabled) { aiOn = false; say(aiDisabled ? 'AI declined - dreams stay hand-written' : 'no live AI in this copy - dreams stay hand-written', COL.slate, 3.2); return; }
+  aiOn = !aiOn; SFX.pad();
+  if (aiOn) {
+    say('AI ON - it will dream new words with you', COL.lime, 3);
+    askAI('You are a robot falling asleep, about to dream you are a cat. Mumble one short sleepy line (max 60 chars), no quotes.', () => pick(MUMBLES))
+      .then(s => { if (aiDisabled) { aiOn = false; say('AI declined - dreams stay hand-written', COL.slate); } else mumbleSay(s.replace(/^["']|["']$/g, '').slice(0, 80)); });
+  } else say('AI OFF - hand-written dreams', COL.slate);
+}
+
+// ===== PLAYER =====
+function respawn(quiet) {
+  const w = words[P.check] && !(words[P.check].py > waterY - 12) ? words[P.check] : words[0];
+  const u = w === words[P.check] ? P.checkU : 0.5;
+  P.x = w.x + clamp(u, 0.1, 0.9) * w.w - P.w / 2; P.y = w.py - P.h - 1; P.vx = 0; P.vy = 0; P.dashT = 0; P.on = w; P.heat = 0; P.inv = quiet ? 0 : 1.2;
+  if (!quiet) burst(P.x + P.w / 2, P.y + 10, 20, COL.mint, 140, { ch: ['z', 'Z'], size: 12, g: -30 });
+}
+function overlap(a, w) { return a.x < w.x + w.w && a.x + a.w > w.x && a.y < w.py + w.h && a.y + a.h > w.py; }
+function solid(w) { return w.shatter <= 0 && w.alpha > 0.05; }
+function shatterWord(w) {
+  if (w.fixed && !w.zz && spec.room) return;
+  w.shatter = 3; SFX.shatter(); shake = Math.max(shake, 6);
+  const L = w.str.toUpperCase().split('');
+  L.forEach((ch, i) => { const cx = w.d.vert ? w.x + w.w / 2 : w.x + 7 + (i + 0.5) * (w.w - 14) / L.length, cy = w.d.vert ? w.py + (i + 0.5) * w.h / L.length : w.py + w.h / 2;
+    particles.push({ x: cx, y: cy, vx: (Math.random() - 0.5) * 260 + P.dvx * 0.3, vy: -120 - Math.random() * 160, life: 1.2, max: 1, col: colorOf(w), size: w.d.f * 0.7, ch, g: 500, rot: 0 }); });
+}
+function hurt(dirX, why) {
+  if (P.inv > 0) return;
+  P.vx = dirX * 360; P.vy = -420; P.inv = 1.1; P.dashT = 0; SFX.hurt(); shake = 10; flash = 0.25;
+  if (mode === 'dream') stab -= 10; floater(P.x, P.y - 10, why, COL.red);
+}
+function updatePlayer(dt) {
+  const dir = (K.right ? 1 : 0) - (K.left ? 1 : 0);
+  if (dir) P.face = dir;
+  P.coyote -= dt; P.buf -= dt; P.dashCD -= dt; P.inv -= dt;
+  if (KP.jump) P.buf = 0.13;
+  // carry by platform
+  if (P.on && P.grounded) { P.x += P.on.dx; P.y += P.on.dy; }
+  const onW = P.grounded ? P.on : null;
+  const icy = (onW && onW.eff.has('ice')) || (P.grounded && P.onFloor && groundIce);
+  P.crouch = P.grounded && K.down && P.dashT <= 0;
+  // dash
+  if (KP.dash && P.canDash && P.dashCD <= 0) {
+    let dx = dir, dy = (K.jump ? -1 : 0) + (K.down && !P.grounded ? 1 : 0);
+    if (!dx && !dy) dx = P.face; const m = Math.hypot(dx, dy);
+    P.dvx = dx / m * 640; P.dvy = dy / m * 640; P.dashT = 0.16; P.dashCD = 0.3; P.canDash = false; P.buf = 0; SFX.dash(); P.sq = -0.25;
+  }
+  if (P.dashT > 0) {
+    P.dashT -= dt; P.vx = P.dvx; P.vy = P.dvy;
+    particles.push({ x: P.x + P.w / 2, y: P.y + P.h / 2, vx: 0, vy: 0, life: 0.3, max: 0.3, col: COL.mint, size: 8, g: 0, ghost: 1, face: P.face });
+    if (P.dashT <= 0) { P.vx *= 0.5; P.vy *= 0.35; }
+  } else {
+    const target = P.crouch ? 0 : dir * 235;
+    const acc = P.grounded ? (icy ? 380 : 2600) : 1500;
+    const dec = P.grounded ? (icy ? 90 : 3000) : 900;
+    const a = (dir && !P.crouch) ? acc : dec;
+    if (P.vx < target) P.vx = Math.min(target, P.vx + a * dt); else if (P.vx > target) P.vx = Math.max(target, P.vx - a * dt);
+    if (windOn && mode === 'dream') P.vx += windDir * (P.grounded ? 260 : 520) * dt * (icy ? 1.6 : 1);
+    const g = (K.jump && P.vy < 0) ? 1200 : 2100;
+    P.vy = Math.min(P.vy + g * dt, 720);
+    if (P.buf > 0 && P.coyote > 0) {
+      P.vy = -600; P.buf = 0; P.coyote = 0; P.grounded = false; P.sq = -0.3; SFX.jump();
+      burst(P.x + P.w / 2, P.y + P.h, 6, COL.slate, 60, { g: 100, life: 0.3 });
+    }
+  }
+  // move X
+  const pb = { x: P.x, y: P.y };
+  P.x += P.vx * dt;
+  for (const w of words) {
+    if (!solid(w) || !overlap(P, w)) continue;
+    if (P.dashT > 0 && Math.abs(P.dvx) > 1) { shatterWord(w); continue; }
+    if (pb.y + P.h <= w.py + 4) continue;
+    if (pb.x + P.w <= w.x + Math.max(0, w.dx) + 1) P.x = w.x - P.w; else if (pb.x >= w.x + w.w + Math.min(0, w.dx) - 1) P.x = w.x + w.w;
+    else { const l = P.x + P.w - w.x, r = w.x + w.w - P.x; if (l < r) P.x -= l; else P.x += r; }
+    if (!P.grounded || Math.sign(P.vx) !== 0) P.vx = 0;
+  }
+  P.x = clamp(P.x, 0, worldW - P.w);
+  // move Y
+  const prevBottom = P.y + P.h, prevTop = P.y;
+  P.y += P.vy * dt;
+  const wasGround = P.grounded, prevOn = P.on;
+  P.grounded = false; P.onFloor = false;
+  for (const w of words) {
+    if (!solid(w) || !overlap(P, w)) continue;
+    if (P.vy >= 0 && prevBottom <= w.py + 8 + Math.max(0, w.dy)) {
+      if (P.dashT > 0 && P.dvy > 1) { shatterWord(w); continue; }
+      P.y = w.py - P.h; P.vy = 0; P.grounded = true; P.on = w;
+    } else if (P.vy < 0 && prevTop >= w.py + w.h - 10) {
+      if (P.dashT > 0) { shatterWord(w); continue; }
+      P.y = w.py + w.h; P.vy = 0;
+    } else if (P.dashT > 0) { shatterWord(w); }
+    else { const l = P.x + P.w - w.x, r = w.x + w.w - P.x; if (l < r) P.x -= l; else P.x += r; }
+  }
+  if (floorY < 600 && P.y + P.h > floorY && prevBottom <= floorY + 10) { P.y = floorY - P.h; P.vy = 0; P.grounded = true; P.onFloor = true; P.on = null; }
+  if (P.grounded) { P.coyote = 0.1; P.canDash = true; }
+  if (P.grounded && (!wasGround || prevOn !== P.on)) {
+    if (!wasGround && prevBottom < P.y + P.h + 30) P.sq = 0.28;
+    if (P.on) onLand(P.on); else burst(P.x + P.w / 2, P.y + P.h, 6, groundIce ? COL.ice : COL.sand, 70, { g: 200, life: 0.3 });
+  }
+  if (P.grounded && P.on && !P.on.zz) {
+    const w = P.on, safe = !w.eff.has('fire') && !(w.eff.has('heavy') && waterOn);
+    if (safe) { P.check = words.indexOf(w); P.checkU = clamp((P.x + P.w / 2 - w.x) / w.w, 0.15, 0.85); }
+  }
+  // knead
+  if (P.crouch && P.on && !P.onFloor && !P.kneadLock && !P.on.scr && mode !== 'clear') {
+    const before = P.kneadT; P.kneadT += dt;
+    if (Math.floor(before / 0.12) !== Math.floor(P.kneadT / 0.12)) SFX.knead(Math.floor(P.kneadT / 0.12));
+    if (P.kneadT >= 0.6) { P.kneadT = 0; P.kneadLock = true; knead(P.on); }
+  } else if (!K.down) { P.kneadLock = false; P.kneadT = 0; } else P.kneadT = Math.max(0, P.kneadT - dt * 2);
+  // fire
+  if (P.grounded && P.on && P.on.eff.has('fire')) {
+    P.heat += dt; P.on.heat = P.heat;
+    if (Math.random() < 0.3) particles.push({ x: P.x + Math.random() * P.w, y: P.y + P.h, vx: 0, vy: -60, life: 0.4, max: 0.4, col: COL.coral, size: 3, g: -100 });
+    if (P.heat > 0.95) { P.vy = -680; P.vx = (Math.random() - 0.5) * 200; P.grounded = false; P.heat = 0; SFX.hiss(); stab -= mode === 'dream' ? 6 : 0;
+      floater(P.x, P.y - 12, 'HOT!', COL.coral); burst(P.x + P.w / 2, P.y + P.h, 16, COL.coral, 160, { g: -50 }); P.sq = -0.35; }
+  } else P.heat = Math.max(0, P.heat - dt * 1.5);
+  // water & wrap
+  if (P.y + P.h > waterY + 8 && waterY < 600) {
+    SFX.splash(); burst(P.x + P.w / 2, waterY, 30, COL.teal, 220, { up: 120 }); shake = 8;
+    if (mode === 'dream') stab -= 12; floater(P.x, waterY - 30, pick(['PFFT!', 'cats hate water', 'SPLASH', 'brr!']), COL.teal); respawn(false);
+  }
+  if (P.y > H + 30) { P.y = -40; P.vy = Math.min(P.vy, 300); P.wrapT = 0.8; burst(P.x + P.w / 2, 4, 12, COL.pale, 80, { ch: ['z', '~'], size: 11, g: 40 }); }
+  P.sq *= Math.pow(0.0005, dt);
+  P.run += Math.abs(P.vx) * dt * 0.05;
+}
+function onLand(w) {
+  ringWord(w); w.ring = 1;
+  if (w.eff.has('ice')) burst(P.x + P.w / 2, P.y + P.h, 8, COL.ice, 100, { g: 200, life: 0.4 });
+  if (w.pad === 'start' && mode === 'room' && pendingStart <= 0) { SFX.pad(); say('falling asleep...', COL.gold); flash = 0.6; pendingStart = 0.5; }
+  if (w.pad === 'ai' && mode === 'room') toggleAI();
+  if (w.pad === 'again' && mode === 'ending') { SFX.pad(); robotWake = 0; enterRoom(); }
+}
+
+// ===== WORLD UPDATE =====
+function update(dt) {
+  T += dt; modeT += dt; intro += dt;
+  // words
+  const k = Math.min(1, dt * 5);
+  for (const w of words) {
+    const px = w.x, py = w.py;
+    if (mode !== 'clear') { if (w.appear > 0) { w.appear -= dt; if (w.appear <= 0) ringWord(w, 0.06); } else w.alpha = Math.min(1, w.alpha + dt * 3); }
+    else { w.ty -= dt * (40 + w.idx * 12); w.alpha = Math.max(0, w.alpha - dt * 0.45); }
+    w.x += (w.tx - w.x) * k; w.y += (w.ty - w.y) * k; w.w += (w.tw - w.w) * k; w.h += (w.th - w.h) * k;
+    const stood = P.grounded && P.on === w;
+    if (w.eff.has('heavy')) w.sink = stood ? Math.min(150, w.sink + 36 * dt) : Math.max(0, w.sink - 22 * dt); else w.sink = Math.max(0, w.sink - 60 * dt);
+    const bob = w.eff.has('light') ? Math.sin(T * 1.7 + w.ph) * 14 : Math.sin(T * 0.9 + w.ph) * 2.5;
+    w.py = w.y + w.sink + bob;
+    w.dx = w.x - px; w.dy = w.py - py;
+    if (w.ring > 0) w.ring = Math.max(0, w.ring - dt * 1.4);
+    if (!stood && w.heat > 0) w.heat = Math.max(0, w.heat - dt);
+    if (w.shatter > 0) { w.shatter -= dt; if (w.shatter <= 0) { if (overlap(P, w)) w.shatter = 0.12; else { burst(w.x + w.w / 2, w.py + w.h / 2, 14, colorOf(w), 90, { g: 0, life: 0.4 }); tone(wordFreq(w), 0.3, { vol: 0.05 }); } } }
+    if (w.scr) {
+      w.scr.t += dt;
+      if (w.scr.t > 2.4 && !w.scr.result) { w.pi = (w.pi + 1) % w.pool.length; const lx = lexOf(w.pool[w.pi]); w.scr.result = { str: w.pool[w.pi], pos: w.pos, tags: lx.tags.slice() }; }
+      if (w.scr.t >= 0.6 && w.scr.result) { const r = w.scr.result; w.scr = null; setWord(w, r); }
+    }
+    if (w.en && w.shatter <= 0) {
+      const en = w.en, ew = w.eff.has('giant') ? 44 : 30, eh = w.eff.has('giant') ? 30 : 22;
+      if (en.stun > 0) en.stun -= dt; else { en.u += en.dir * (w.eff.has('giant') ? 80 : 60) * dt / Math.max(30, w.w - ew); if (en.u > 1) { en.u = 1; en.dir = -1; } if (en.u < 0) { en.u = 0; en.dir = 1; } }
+      const ex = w.x + 4 + en.u * (w.w - 8 - ew), ey = w.py - eh; en.x = ex; en.y = ey; en.w = ew; en.h = eh;
+      if (mode !== 'clear' && P.x < ex + ew && P.x + P.w > ex && P.y < ey + eh && P.y + P.h > ey) {
+        if ((P.vy > 0 && P.y + P.h - ey < 14) || P.dashT > 0) { if (en.stun <= 0) { en.stun = 3; SFX.stomp(); burst(ex + ew / 2, ey, 12, COL.red, 120, { ch: ['!', '*'], size: 12 }); floater(ex, ey - 10, 'bonk', COL.red); } P.vy = -480; P.dashT = 0; }
+        else if (en.stun <= 0) hurt(P.x + P.w / 2 < ex + ew / 2 ? -1 : 1, w.str === 'vacuum' ? 'VRRRM!' : 'WOOF!');
+      }
+    }
+    if (w.eff.has('fire') && Math.random() < dt * (6 + w.heat * 20) && w.alpha > 0.5)
+      particles.push({ x: w.x + Math.random() * w.w, y: w.py, vx: (Math.random() - 0.5) * 20, vy: -40 - Math.random() * 40, life: 0.7, max: 0.7, col: Math.random() < 0.5 ? COL.coral : COL.amber, size: 2 + Math.random() * 3, g: -40 });
+  }
+  // global effects
+  const wt = waterOn ? (boiling ? 320 : 400) : 640, ft = groundOn && !waterOn ? 470 : 640;
+  waterY += (wt - waterY) * Math.min(1, dt * 1.6); floorY += (ft - floorY) * Math.min(1, dt * 2.5);
+  windT -= dt; if (windT <= 0) { windT = 2.5 + Math.random() * 2; windDir = -windDir; }
+  if (windOn && Math.random() < dt * 25) particles.push({ x: camX + (windDir > 0 ? -10 : W + 10), y: 60 + Math.random() * 400, vx: windDir * (300 + Math.random() * 200), vy: (Math.random() - 0.5) * 20, life: 3, max: 3, col: COL.lime, size: 1, g: 0, streak: 1 });
+  if (boiling && Math.random() < dt * 12) particles.push({ x: camX + Math.random() * W, y: waterY + 10 + Math.random() * 80, vx: 0, vy: -50, life: 0.8, max: 0.8, col: COL.pale, size: 3, g: -40, bubble: 1 });
+  // player
+  if (mode === 'room' || mode === 'dream' || mode === 'ending') updatePlayer(dt);
+  // goals
+  if (mode === 'dream') {
+    stab -= dt * 0.85;
+    for (const w of words) {
+      if (w.eff.has('prey') && !w.preyTaken && w.shatter <= 0) {
+        const fx = w.x + w.w / 2, fy = w.py - 26 + Math.sin(T * 3 + w.ph) * 4;
+        if (Math.abs(P.x + P.w / 2 - fx) < 22 && Math.abs(P.y + P.h / 2 - fy) < 22) { w.preyTaken = true; collected++; SFX.collect(); burst(fx, fy, 24, COL.pink, 180, { ch: ['♥', '*'], size: 12, g: 0 }); say(needPrey && collected >= needPrey ? 'got it! now find the exit' : 'nom', COL.pink); stab = Math.min(100, stab + 10); }
+      }
+      if (w.eff.has('exit') && w.alpha > 0.5) {
+        const r = w.eff.has('tiny') ? 9 : w.eff.has('giant') ? 38 : 26, cx = w.x + w.w / 2, cy = w.py - r - 16;
+        const d = Math.hypot(P.x + P.w / 2 - cx, P.y + P.h / 2 - cy);
+        if (d < r + 12 || (P.grounded && P.on === w)) {
+          if (needPrey && collected < needPrey) { if (msg.t < 1.6) say('the ' + w.str + ' is locked... the dream wants a fish first', COL.pink); }
+          else if (w.eff.has('tiny')) { if (msg.t < 1.6) say('too tiny to squeeze through!', COL.gold); }
+          else { clearDream(); break; }
+        }
+      }
+    }
+    if (stab <= 0) halfWake();
+  }
+  if (pendingStart > 0) { pendingStart -= dt; if (pendingStart <= 0 && mode === 'room') startGame(); }
+  if (mode === 'clear' && modeT > 2.6) { dreamIdx++; if (dreamIdx >= DREAMS.length) enterEnding(); else loadDream(); }
+  // camera
+  const tx = clamp(P.x + P.w / 2 - W * 0.42 + P.vx * 0.25, 0, worldW - W); camX += (tx - camX) * Math.min(1, dt * 4);
+  // fx
+  for (const p of particles) { p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += (p.g || 0) * dt; if (p.rot !== undefined) p.rot += dt * 5; }
+  particles = particles.filter(p => p.life > 0); if (particles.length > 500) particles.splice(0, particles.length - 500);
+  for (const f of floaters) { f.life -= dt; f.y -= dt * 30; } floaters = floaters.filter(f => f.life > 0);
+  msg.t -= dt; mumble.t -= dt; shake = Math.max(0, shake - dt * 30); flash = Math.max(0, flash - dt * 1.5);
+  if (robotWake > 0 && robotWake < 50) robotWake -= dt;
+  for (const k2 in KP) KP[k2] = 0;
+}
+
+// ===== BACKGROUND =====
+const STARS = []; { const r = rng(42), AB = 'ABCDEFGHIJKLMNOPQRSTUVWXYZzZ?*+~.'; for (let i = 0; i < 150; i++) STARS.push({ x: r() * 2400, y: r() * H, z: 0.15 + r() * 0.5, ch: AB[(r() * AB.length) | 0], s: 9 + r() * 16, ph: r() * 6, c: r() < 0.7 ? COL.mint : r() < 0.5 ? COL.amber : COL.pink }); }
+const scan = document.createElement('canvas'); scan.width = 2; scan.height = 3; { const s = scan.getContext('2d'); s.fillStyle = 'rgba(0,0,0,0.32)'; s.fillRect(0, 0, 2, 1); }
+const scanPat = ctx.createPattern(scan, 'repeat');
+const vig = document.createElement('canvas'); vig.width = W; vig.height = H;
+{ const v = vig.getContext('2d'); const g = v.createRadialGradient(W / 2, H / 2, H * 0.35, W / 2, H / 2, H * 0.95); g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.75)'); v.fillStyle = g; v.fillRect(0, 0, W, H); }
+function drawBG() {
+  const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#040a16'); g.addColorStop(0.6, '#06131c'); g.addColorStop(1, '#0a1a1c');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  // drifting soft blobs
+  ctx.globalCompositeOperation = 'lighter';
+  [[0.2, COL.teal, 260], [0.75, '#7a4a1a', 220], [0.5, '#123a5a', 300]].forEach(([fx, c, r], i) => {
+    const x = ((fx * W + Math.sin(T * 0.07 + i) * 120 - camX * 0.08) % (W + 400) + W + 400) % (W + 400) - 200, y = 200 + Math.sin(T * 0.11 + i * 2) * 80;
+    const rg = ctx.createRadialGradient(x, y, 0, x, y, r); rg.addColorStop(0, c + '33'); rg.addColorStop(1, c + '00'); ctx.fillStyle = rg; ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  });
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const s of STARS) {
+    const x = ((s.x - camX * s.z + Math.sin(T * 0.2 + s.ph) * 10) % 1200 + 1200) % 1200 - 120;
+    const y = ((s.y - T * 6 * s.z) % H + H) % H;
+    ctx.globalAlpha = (0.12 + 0.18 * (0.5 + 0.5 * Math.sin(T * 1.3 + s.ph))) * s.z * 2.2;
+    ctx.fillStyle = s.c; ctx.font = `${s.s * s.z * 1.6 | 0}px ${FW}`; ctx.fillText(s.ch, x, y);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ===== DRAW WORLD =====
+function drawWord(w) {
+  if (w.alpha <= 0) return;
+  const col = colorOf(w), d = w.d, L0 = w.zz ? 'zZ' : w.str.toUpperCase();
+  let L = L0;
+  if (w.scr) { const n = Math.max(1, Math.round(lerp(w.scr.from.length, w.scr.result ? w.scr.result.str.length : w.scr.from.length, Math.min(1, w.scr.t / 0.6))));
+    const AB = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ#%&@*'; L = ''; const sd = Math.floor(T * 18); for (let i = 0; i < n; i++) L += AB[(sd * 7 + i * 13 + (Math.random() * 3 | 0)) % AB.length]; }
+  const sub = w.py > waterY - 2;
+  ctx.save(); ctx.globalAlpha = w.alpha * (w.shatter > 0 ? 0.18 : 1) * (sub ? 0.55 : 1);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  const f = d.f * (w.h / Math.max(1, w.th)) ** 0.2;
+  ctx.font = `${f | 0}px ${FW}`;
+  const shakeAmt = (w.eff.has('wind') ? 2.2 : 0) * (RM ? 0.3 : 1) + (w.scr ? 3 : 0);
+  // underglow plate
+  ctx.fillStyle = col; ctx.globalAlpha *= 0.08; rr(w.x - 2, w.py - 2, w.w + 4, w.h + 4, 6); ctx.fill(); ctx.globalAlpha /= 0.08;
+  if (w.eff.has('ice')) { ctx.strokeStyle = COL.ice; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(w.x, w.py + 1); ctx.lineTo(w.x + w.w, w.py + 1); ctx.stroke(); }
+  if (w.shatter > 0) { ctx.setLineDash([4, 6]); ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.globalAlpha = w.alpha * 0.6; rr(w.x, w.py, w.w, w.h, 5); ctx.stroke(); ctx.setLineDash([]); ctx.restore(); return; }
+  const n = L.length, heatGlow = w.eff.has('fire') ? 10 + w.heat * 20 + Math.random() * 6 : 0;
+  for (let pass = 0; pass < 2; pass++) {
+    for (let i = 0; i < n; i++) {
+      let cx, cy;
+      if (d.vert) { const sh = (w.h - 10) / n; cx = w.x + w.w / 2; cy = w.py + 6 + sh * (i + 1) - (sh - d.cap) / 2; }
+      else { const cell = (w.w - 14) / n; cx = w.x + 7 + cell * (i + 0.5); cy = w.py + w.h - 4; }
+      const hop = w.ring > 0 ? Math.max(0, Math.sin((1 - w.ring) * 9 - i * 0.7)) * 6 * w.ring : 0;
+      cx += (Math.random() - 0.5) * shakeAmt; cy += (Math.random() - 0.5) * shakeAmt - hop;
+      if (pass === 0) {
+        ctx.globalCompositeOperation = 'lighter'; ctx.shadowBlur = 0;
+        ctx.fillStyle = 'rgba(255,60,90,0.35)'; ctx.fillText(L[i], cx - 1.6, cy);
+        ctx.fillStyle = 'rgba(60,200,255,0.35)'; ctx.fillText(L[i], cx + 1.6, cy);
+        ctx.globalCompositeOperation = 'source-over';
+      } else {
+        ctx.shadowColor = col; ctx.shadowBlur = 12 + w.ring * 22 + heatGlow;
+        ctx.fillStyle = w.ai ? (i % 2 ? COL.pink : col) : col;
+        ctx.fillText(L[i], cx, cy);
+      }
+    }
+  }
+  ctx.shadowBlur = 0;
+  // tag label
+  if (w.eff.size && !w.zz) { ctx.font = `15px ${FH}`; ctx.fillStyle = col; ctx.globalAlpha = 0.55 * w.alpha; ctx.textBaseline = 'top';
+    ctx.fillText([...w.eff].map(t => TAGWORD[t]).join(' · '), w.x + w.w / 2, w.py + w.h + 4); }
+  if (w.ai) { ctx.font = `14px ${FH}`; ctx.fillStyle = COL.pink; ctx.globalAlpha = 0.7; ctx.textBaseline = 'bottom'; ctx.fillText('✦', w.x + w.w + 4, w.py + 4); }
+  ctx.restore();
+}
+function drawExtras(w) {
+  if (w.alpha < 0.3) return;
+  const e = w.eff;
+  if (e.has('exit')) {
+    const r = e.has('tiny') ? 9 : e.has('giant') ? 38 : 26, cx = w.x + w.w / 2, cy = w.py - r - 16, locked = needPrey && collected < needPrey;
+    ctx.save(); ctx.globalAlpha = w.alpha;
+    ctx.shadowColor = COL.gold; ctx.shadowBlur = 25 + Math.sin(T * 3) * 8;
+    if (w.str === 'moon' || !['door', 'window'].includes(w.str)) {
+      const rg = ctx.createRadialGradient(cx - r * 0.3, cy - r * 0.3, 2, cx, cy, r); rg.addColorStop(0, '#fffbe0'); rg.addColorStop(1, COL.gold);
+      ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.fill(); ctx.shadowBlur = 0;
+      ctx.fillStyle = 'rgba(180,140,60,0.35)'; [[0.3, -0.2, 0.18], [-0.35, 0.25, 0.12], [0.1, 0.4, 0.1]].forEach(([a, b, s]) => { ctx.beginPath(); ctx.arc(cx + a * r, cy + b * r, s * r, 0, 7); ctx.fill(); });
+    } else {
+      const ww = r * 1.3, hh = r * (w.str === 'door' ? 2 : 1.5);
+      ctx.strokeStyle = COL.gold; ctx.lineWidth = 3; ctx.fillStyle = 'rgba(255,229,138,0.25)';
+      ctx.fillRect(cx - ww / 2, cy + r - hh, ww, hh); ctx.strokeRect(cx - ww / 2, cy + r - hh, ww, hh);
+      ctx.shadowBlur = 0; ctx.lineWidth = 2;
+      if (w.str === 'window') { ctx.beginPath(); ctx.moveTo(cx, cy + r - hh); ctx.lineTo(cx, cy + r); ctx.moveTo(cx - ww / 2, cy + r - hh / 2); ctx.lineTo(cx + ww / 2, cy + r - hh / 2); ctx.stroke(); }
+      else { ctx.fillStyle = COL.gold; ctx.beginPath(); ctx.arc(cx + ww * 0.3, cy + r - hh * 0.45, 2.5, 0, 7); ctx.fill(); }
+    }
+    if (locked) { ctx.fillStyle = COL.pink; ctx.font = `18px ${FH}`; ctx.textAlign = 'center'; ctx.fillText('needs ❥ fish', cx, cy - r - 10); }
+    ctx.restore();
+  }
+  if (e.has('prey') && !w.preyTaken && w.shatter <= 0) {
+    const fx = w.x + w.w / 2, fy = w.py - 26 + Math.sin(T * 3 + w.ph) * 4, s = e.has('giant') ? 1.6 : 1;
+    ctx.save(); ctx.translate(fx, fy); ctx.scale(s, s); ctx.shadowColor = COL.pink; ctx.shadowBlur = 16; ctx.fillStyle = COL.pink;
+    ctx.beginPath(); ctx.ellipse(0, 0, 11, 6, 0, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(9, 0); ctx.lineTo(17, -6 + Math.sin(T * 10) * 2); ctx.lineTo(17, 6 + Math.sin(T * 10) * 2); ctx.closePath(); ctx.fill();
+    ctx.shadowBlur = 0; ctx.fillStyle = COL.bg; ctx.beginPath(); ctx.arc(-6, -1, 1.5, 0, 7); ctx.fill(); ctx.restore();
+  }
+  if (w.en && w.en.x !== undefined && w.shatter <= 0) drawEnemy(w);
+}
+function drawEnemy(w) {
+  const en = w.en, x = en.x, y = en.y, ew = en.w, eh = en.h, st = en.stun > 0;
+  ctx.save(); ctx.translate(x + ew / 2, y + eh); if (st) ctx.scale(1.2, 0.6); ctx.scale(en.dir, 1);
+  ctx.shadowColor = COL.red; ctx.shadowBlur = 10; ctx.fillStyle = '#2a3445'; ctx.strokeStyle = COL.red; ctx.lineWidth = 2;
+  if (w.str === 'vacuum' || w.str !== 'dog') {
+    rr(-ew / 2, -eh, ew, eh * 0.8, 6); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(ew / 2 - 4, -eh * 0.8); ctx.lineTo(ew / 2 + 6, -eh - 8); ctx.stroke();
+    ctx.fillStyle = COL.red; ctx.beginPath(); ctx.arc(-ew / 4, -2, 3, 0, 7); ctx.arc(ew / 4, -2, 3, 0, 7); ctx.fill();
+    ctx.fillStyle = st ? COL.slate : (Math.sin(T * 8) > 0 ? COL.red : COL.amber); ctx.fillRect(-4, -eh * 0.6, 8, 3);
+  } else {
+    rr(-ew / 2, -eh * 0.75, ew * 0.75, eh * 0.5, 4); ctx.fill(); ctx.stroke();
+    rr(ew * 0.1, -eh, ew * 0.42, eh * 0.45, 3); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(ew * 0.15, -eh); ctx.lineTo(ew * 0.12, -eh - 7); ctx.stroke();
+    const leg = Math.sin(T * 14) * 3 * (st ? 0 : 1); ctx.beginPath(); ctx.moveTo(-ew * 0.4, -eh * 0.25); ctx.lineTo(-ew * 0.4 + leg, 0); ctx.moveTo(ew * 0.15, -eh * 0.25); ctx.lineTo(ew * 0.15 - leg, 0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-ew / 2, -eh * 0.65); ctx.lineTo(-ew / 2 - 6, -eh * 0.9 + Math.sin(T * 20) * 2); ctx.stroke();
+    ctx.fillStyle = st ? COL.slate : COL.red; ctx.fillRect(ew * 0.3, -eh * 0.85, 4, 3);
+  }
+  ctx.restore();
+  if (st) { ctx.fillStyle = COL.gold; ctx.font = `16px ${FH}`; ctx.textAlign = 'center'; ctx.fillText('z z', x + ew / 2, y - 8 + Math.sin(T * 4) * 2); }
+}
+function drawCat() {
+  const x = P.x + P.w / 2, y = P.y + P.h, cr = P.crouch;
+  if (P.inv > 0 && Math.floor(T * 16) % 2) return;
+  ctx.save(); ctx.translate(x, y);
+  const sx = 1 + P.sq * 0.6, sy = 1 - P.sq * 0.6; ctx.scale(P.face * sx, sy);
+  const body = '#ffb46a', dark = '#c96a32';
+  ctx.shadowColor = '#ffb46a'; ctx.shadowBlur = 12;
+  ctx.strokeStyle = body; ctx.lineWidth = 4; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(-10, cr ? -6 : -10); ctx.quadraticCurveTo(-20, -12 + Math.sin(T * 5) * 4, -17 + Math.sin(T * 3) * 3, -24 + Math.sin(T * 4) * 3); ctx.stroke();
+  ctx.lineWidth = 3.5;
+  if (!cr) { const ph = P.grounded ? P.run : 0.8, a = Math.abs(P.vx) > 20 && P.grounded ? 1 : 0;
+    [[-7, 0], [-3, Math.PI], [5, Math.PI / 2], [9, Math.PI * 1.5]].forEach(([lx, o]) => { ctx.beginPath(); ctx.moveTo(lx, -6); ctx.lineTo(lx + Math.sin(ph * 6 + o) * 3 * a + (P.grounded ? 0 : -2), -1); ctx.stroke(); }); }
+  else { const kn = P.kneadT > 0 ? Math.sin(T * 26) * 2 : 0; ctx.beginPath(); ctx.moveTo(8, -3); ctx.lineTo(12, -1 - kn); ctx.moveTo(5, -3); ctx.lineTo(9, -1 + kn); ctx.stroke(); }
+  ctx.fillStyle = body; ctx.beginPath(); ctx.ellipse(0, cr ? -5 : -10, 12, cr ? 5 : 7, 0, 0, 7); ctx.fill();
+  ctx.shadowBlur = 0; ctx.strokeStyle = dark; ctx.lineWidth = 2;
+  [-5, 0, 5].forEach(sx2 => { ctx.beginPath(); ctx.moveTo(sx2, cr ? -9 : -16); ctx.lineTo(sx2 - 1, cr ? -6 : -12); ctx.stroke(); });
+  const hy = cr ? -9 : -16;
+  ctx.fillStyle = body; ctx.shadowColor = body; ctx.shadowBlur = 8;
+  ctx.beginPath(); ctx.arc(11, hy, 7.5, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(5, hy - 4); ctx.lineTo(6.5, hy - 13); ctx.lineTo(10.5, hy - 6); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(12, hy - 6); ctx.lineTo(16, hy - 13); ctx.lineTo(17.5, hy - 3); ctx.closePath(); ctx.fill();
+  ctx.shadowBlur = 0; ctx.fillStyle = '#ff8fa0'; ctx.beginPath(); ctx.moveTo(7, hy - 6); ctx.lineTo(7.5, hy - 10); ctx.lineTo(9.5, hy - 6.5); ctx.fill();
+  const blink = (T % 3.2) < 0.12 || P.kneadT > 0;
+  ctx.fillStyle = COL.mint; ctx.shadowColor = COL.mint; ctx.shadowBlur = 6;
+  if (blink) { ctx.fillRect(12, hy - 1, 4, 1.5); } else { ctx.beginPath(); ctx.ellipse(14, hy - 1, 1.8, 2.6, 0, 0, 7); ctx.fill(); }
+  ctx.shadowBlur = 0; ctx.fillStyle = '#ff8fa0'; ctx.fillRect(17.5, hy + 1.5, 2, 1.5);
+  ctx.strokeStyle = 'rgba(255,240,220,0.6)'; ctx.lineWidth = 0.8; ctx.beginPath(); ctx.moveTo(17, hy + 3); ctx.lineTo(24, hy + 2); ctx.moveTo(17, hy + 4); ctx.lineTo(24, hy + 5.5); ctx.stroke();
+  ctx.restore();
+  if (P.crouch && P.on && !P.onFloor && P.kneadT > 0) {
+    ctx.strokeStyle = COL.mint; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, y - 30, 9, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * P.kneadT / 0.6); ctx.stroke();
+  }
+  if (P.heat > 0.2) { ctx.fillStyle = COL.coral; ctx.font = `16px ${FH}`; ctx.textAlign = 'center'; ctx.fillText('!'.repeat(1 + (P.heat * 3 | 0)), x, y - 30); }
+}
+function drawRobot(cx, cy, s, awake) {
+  ctx.save(); ctx.translate(cx, cy); ctx.scale(s, s);
+  ctx.fillStyle = '#1b2738'; ctx.strokeStyle = COL.slate; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.ellipse(-6, 6, 30, 10, 0, 0, 7); ctx.fillStyle = '#25364a'; ctx.fill();
+  const sit = awake ? 1 : 0;
+  ctx.rotate(awake ? 0 : -0.35);
+  ctx.fillStyle = '#2a3c52'; rr(-22, -20 - sit * 16, 44, 30, 7); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, -20 - sit * 16); ctx.lineTo(0, -32 - sit * 16); ctx.stroke();
+  ctx.fillStyle = Math.sin(T * (awake ? 6 : 1.5)) > 0 ? COL.coral : '#552'; ctx.beginPath(); ctx.arc(0, -34 - sit * 16, 3.5, 0, 7); ctx.fill();
+  ctx.fillStyle = '#0c1420'; rr(-16, -14 - sit * 16, 32, 16, 4); ctx.fill();
+  ctx.strokeStyle = COL.mint; ctx.fillStyle = COL.mint; ctx.shadowColor = COL.mint; ctx.shadowBlur = 8; ctx.lineWidth = 2;
+  if (awake) { ctx.beginPath(); ctx.arc(-7, -6 - sit * 16, 3, 0, 7); ctx.arc(7, -6 - sit * 16, 3, 0, 7); ctx.fill(); }
+  else { ctx.beginPath(); ctx.arc(-7, -8, 3, 0.2, Math.PI - 0.2); ctx.moveTo(10, -6); ctx.arc(7, -8, 3, 0.2, Math.PI - 0.2); ctx.stroke(); }
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = COL.teal; ctx.globalAlpha = 0.85; rr(-30, 6 - sit * 4, 60, 12, 5); ctx.fill(); ctx.globalAlpha = 1;
+  ctx.restore();
+}
+function drawWater() {
+  if (waterY < 600) {
+    ctx.save(); const g = ctx.createLinearGradient(0, waterY, 0, H); g.addColorStop(0, boiling ? 'rgba(255,107,107,0.35)' : 'rgba(31,179,166,0.45)'); g.addColorStop(1, 'rgba(6,40,50,0.85)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(0, H);
+    for (let x = 0; x <= W; x += 16) ctx.lineTo(x, waterY + Math.sin((x + camX) * 0.03 + T * 2) * 4 + (boiling ? Math.sin(x * 0.2 + T * 9) * 2 : 0));
+    ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = boiling ? COL.coral : COL.teal; ctx.shadowColor = ctx.strokeStyle; ctx.shadowBlur = 10; ctx.lineWidth = 2; ctx.beginPath();
+    for (let x = 0; x <= W; x += 16) { const y = waterY + Math.sin((x + camX) * 0.03 + T * 2) * 4 + (boiling ? Math.sin(x * 0.2 + T * 9) * 2 : 0); x ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+    ctx.stroke(); ctx.shadowBlur = 0;
+    ctx.font = `14px ${FH}`; ctx.fillStyle = 'rgba(138,255,208,0.25)'; ctx.textAlign = 'center';
+    for (let i = 0; i < 12; i++) { const x = ((i * 97 - camX * 0.5 + T * 10) % W + W) % W; ctx.fillText(boiling ? 'o' : '~', x, waterY + 30 + (i % 3) * 30); }
+    ctx.restore();
+  }
+  if (floorY < 600) {
+    ctx.save(); ctx.strokeStyle = groundIce ? COL.ice : COL.sand; ctx.shadowColor = ctx.strokeStyle; ctx.shadowBlur = 12; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(0, floorY); ctx.lineTo(W, floorY); ctx.stroke(); ctx.shadowBlur = 0;
+    ctx.fillStyle = groundIce ? 'rgba(143,216,255,0.10)' : 'rgba(232,195,122,0.07)'; ctx.fillRect(0, floorY, W, H - floorY);
+    ctx.globalAlpha = 0.3; ctx.fillStyle = ctx.strokeStyle; ctx.font = `12px ${FH}`;
+    for (let i = 0; i < 40; i++) { const x = ((i * 53 - camX) % W + W) % W; ctx.fillText(groundIce ? '*' : '.', x, floorY + 12 + (i % 4) * 14); }
+    ctx.restore();
+  }
+}
+
+// ===== HUD =====
+function drawHUD() {
+  ctx.save(); ctx.textBaseline = 'top';
+  // AI tag
+  ctx.font = `18px ${FH}`; ctx.textAlign = 'right'; ctx.fillStyle = aiOn && !aiDisabled ? COL.lime : COL.slate;
+  ctx.fillText(aiOn && !aiDisabled ? (aiBusy ? 'AI: live …' : 'AI: live') : 'AI: scripted', W - 14, 10);
+  if (mode === 'dream' || mode === 'clear') {
+    // stability
+    const bw = 170, bx = W - 14 - bw, by = 34;
+    ctx.fillStyle = 'rgba(138,255,208,0.12)'; rr(bx, by, bw, 10, 5); ctx.fill();
+    const fr = clamp(stab / 100, 0, 1); ctx.fillStyle = fr < 0.25 ? COL.coral : COL.mint; ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 8;
+    ctx.beginPath(); ctx.moveTo(bx, by + 10);
+    for (let x = 0; x <= bw * fr; x += 4) ctx.lineTo(bx + x, by + 2 + Math.sin(x * 0.2 + T * 5) * 1.5);
+    ctx.lineTo(bx + bw * fr, by + 10); ctx.closePath(); ctx.fill(); ctx.shadowBlur = 0;
+    ctx.fillStyle = COL.slate; ctx.font = `15px ${FH}`; ctx.fillText('dream stability', W - 14, 47);
+    // dream title & sentence
+    ctx.textAlign = 'left'; ctx.font = `18px ${FH}`; ctx.fillStyle = COL.slate;
+    ctx.fillText(`DREAM ${Math.min(dreamIdx + 1, 5)}/5${spec && spec.ai ? '  ✦ AI-written' : ''}`, 14, 10);
+    let x = 14; ctx.font = `26px ${FH}`;
+    words.forEach(w => { if (w.zz) return; const s = (w.scr ? '▒'.repeat(w.str.length) : w.str); ctx.fillStyle = colorOf(w); ctx.globalAlpha = P.on === w ? 1 : 0.75;
+      ctx.fillText(s, x, 28); const ww = ctx.measureText(s).width; if (P.on === w && P.grounded) ctx.fillRect(x, 54, ww, 2); x += ww + 10; });
+    ctx.globalAlpha = 1; ctx.font = `18px ${FH}`; ctx.fillStyle = COL.gold;
+    const ex = words.find(w => w.eff.has('exit'));
+    const goal = (needPrey ? (collected >= needPrey ? '✓ fish caught · ' : 'catch a FISH · then ') : '') + 'reach the ' + (ex ? ex.str.toUpperCase() : 'EXIT');
+    ctx.fillText('◇ ' + goal, 14, 60);
+    if (dreamIdx === 0 && mode === 'dream' && modeT < 20 && stats.kneads === 0) { ctx.fillStyle = COL.mint; ctx.globalAlpha = 0.6 + 0.4 * Math.sin(T * 4); ctx.fillText('hold ↓ on a word to KNEAD it into another word', 14, 80); ctx.globalAlpha = 1; }
+  }
+  if (mode === 'room') {
+    ctx.textAlign = 'center'; ctx.font = `46px ${FW}`; ctx.shadowColor = COL.mint; ctx.shadowBlur = 20; ctx.fillStyle = COL.mint;
+    ctx.fillText('DREAMS OF', W / 2, 40); ctx.fillStyle = COL.amber; ctx.shadowColor = COL.amber; ctx.fillText('ELECTRIC CATS', W / 2 + Math.sin(T * 1.3) * 3, 90); ctx.shadowBlur = 0;
+    ctx.font = `20px ${FH}`; ctx.fillStyle = COL.ink;
+    ctx.fillText('← → walk   ↑ / space jump   SHIFT dash through words   hold ↓ on a word: KNEAD it', W / 2, 150, W - 40);
+    ctx.fillStyle = COL.slate; ctx.fillText('the world is a sentence. every word is a platform. what it means is what it does.', W / 2, 174, W - 40);
+    const ai = words.find(w => w.pad === 'ai');
+    if (ai) { ctx.font = `20px ${FH}`; ctx.fillStyle = aiOn ? COL.lime : COL.slate; ctx.fillText(sample && !aiDisabled ? (aiOn ? 'AI: ON' : 'AI: OFF') : 'AI: n/a', ai.x + ai.w / 2 - camX, ai.py - 30); }
+    const st = words.find(w => w.pad === 'start'); if (st) { ctx.fillStyle = COL.gold; ctx.fillText('▼ land here', st.x + st.w / 2 - camX, st.py - 30 + Math.sin(T * 4) * 3); }
+    const sl = words.find(w => w.pad === 'sleep'); if (sl) { ctx.fillStyle = COL.mint; ctx.globalAlpha = 0.7; ctx.fillText('try kneading me', sl.x + sl.w / 2 - camX, sl.py - 30); ctx.globalAlpha = 1; }
+  }
+  if (mode === 'ending') {
+    ctx.textAlign = 'center'; ctx.font = `42px ${FW}`; ctx.fillStyle = COL.gold; ctx.shadowColor = COL.gold; ctx.shadowBlur = 20;
+    ctx.fillText('THE ROBOT WAKES UP', W / 2, 40); ctx.shadowBlur = 0;
+    ctx.font = `22px ${FH}`; ctx.fillStyle = COL.ink;
+    ctx.fillText(`5 dreams · ${stats.kneads} words kneaded · ${stats.ai} dreamt by AI · ${stats.reshuffles} half-wakes · ${((T - stats.t0) / 60).toFixed(1)} min`, W / 2, 96);
+    const ag = words.find(w => w.pad === 'again'); if (ag) { ctx.fillStyle = COL.gold; ctx.fillText('▼ land on AGAIN to sleep once more', ag.x + ag.w / 2 - camX, ag.py - 34 + Math.sin(T * 4) * 3); }
+  }
+  // message
+  if (msg.t > 0) { ctx.textAlign = 'center'; ctx.font = `26px ${FH}`; ctx.globalAlpha = Math.min(1, msg.t * 2); ctx.fillStyle = msg.col; ctx.shadowColor = msg.col; ctx.shadowBlur = 10;
+    ctx.fillText(msg.text, W / 2, mode === 'room' ? 210 : 104); ctx.shadowBlur = 0; ctx.globalAlpha = 1; }
+  // robot corner + bubbles + mumble
+  const awake = robotWake > 0, rx = 62, ry = H - 34;
+  if (mode === 'ending') drawRobot(W - 130, 215, 2.4, true); else drawRobot(rx, ry, 1, awake);
+  if (!awake || mode !== 'ending') {
+    ctx.font = `${16}px ${FW}`; ctx.fillStyle = COL.slate; ctx.textAlign = 'center';
+    for (let i = 0; i < 3; i++) { const ph = (T * 0.5 + i / 3) % 1; ctx.globalAlpha = Math.sin(ph * Math.PI) * 0.8; ctx.font = `${(10 + ph * 14) | 0}px ${FW}`; ctx.fillText(i % 2 ? 'z' : 'Z', rx + 18 + ph * 30, ry - 40 - ph * 50); }
+    ctx.globalAlpha = 0.5; ctx.strokeStyle = COL.slate; ctx.lineWidth = 1.5;
+    [[100, H - 70, 4], [118, H - 88, 6], [142, H - 104, 8]].forEach(([bx, by, br]) => { ctx.beginPath(); ctx.arc(bx, by, br, 0, 7); ctx.stroke(); });
+    ctx.globalAlpha = 1;
+  }
+  if (mumble.t > 0 && mumble.text) {
+    ctx.font = `19px ${FH}`; ctx.textAlign = 'left'; const tw = Math.min(ctx.measureText(mumble.text).width, 560); const n = Math.min(mumble.text.length, Math.floor((6 - mumble.t) * 40));
+    ctx.globalAlpha = Math.min(1, mumble.t); const bx = mode === 'ending' ? 20 : 150, by = mode === 'ending' ? H - 44 : H - 120;
+    ctx.fillStyle = 'rgba(10,20,32,0.82)'; rr(bx, by, tw + 20, 28, 12); ctx.fill();
+    ctx.strokeStyle = COL.slate; ctx.lineWidth = 1; ctx.stroke(); ctx.fillStyle = COL.ink; ctx.fillText(mumble.text.slice(0, n), bx + 10, by + 5, 560); ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
+
+// ===== MAIN LOOP =====
+function render() {
+  ctx.save();
+  const sk = shake * (RM ? 0.2 : 1); if (sk > 0) ctx.translate((Math.random() - 0.5) * sk, (Math.random() - 0.5) * sk);
+  drawBG();
+  ctx.save(); ctx.translate(-Math.round(camX), 0);
+  for (const w of words) drawWord(w);
+  for (const w of words) drawExtras(w);
+  for (const p of particles) {
+    const a = Math.max(0, p.life / (p.max || 1)); ctx.globalAlpha = Math.min(1, a);
+    if (p.ghost) { ctx.globalAlpha = a * 0.35; ctx.fillStyle = COL.mint; ctx.beginPath(); ctx.ellipse(p.x, p.y, 12, 7, 0, 0, 7); ctx.fill(); }
+    else if (p.streak) { ctx.strokeStyle = p.col; ctx.globalAlpha = 0.35; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - p.vx * 0.05, p.y); ctx.stroke(); }
+    else if (p.ch) { ctx.fillStyle = p.col; ctx.font = `${p.size | 0}px ${FW}`; ctx.textAlign = 'center'; ctx.save(); ctx.translate(p.x, p.y); if (p.rot) ctx.rotate(p.rot); ctx.fillText(p.ch, 0, 0); ctx.restore(); }
+    else if (p.bubble) { ctx.strokeStyle = p.col; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, 7); ctx.stroke(); }
+    else { ctx.fillStyle = p.col; ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size); }
+  }
+  ctx.globalAlpha = 1;
+  if (mode !== 'clear') drawCat();
+  else { ctx.globalAlpha = Math.max(0, 1 - modeT); drawCat(); ctx.globalAlpha = 1; }
+  for (const f of floaters) { ctx.globalAlpha = Math.min(1, f.life); ctx.fillStyle = f.col; ctx.font = `20px ${FH}`; ctx.textAlign = 'center'; ctx.fillText(f.text, f.x, f.y); }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+  drawWater();
+  drawHUD();
+  if (mode === 'clear') { ctx.fillStyle = `rgba(255,229,138,${Math.min(0.5, modeT * 0.2)})`; ctx.font = `40px ${FW}`; ctx.textAlign = 'center'; ctx.fillStyle = COL.gold; ctx.globalAlpha = Math.min(1, modeT); ctx.shadowColor = COL.gold; ctx.shadowBlur = 20;
+    ctx.fillText(dreamIdx + 1 >= DREAMS.length ? 'the dream is ending...' : 'the dream dissolves...', W / 2, H / 2); ctx.shadowBlur = 0; ctx.globalAlpha = 1; }
+  // CRT
+  ctx.fillStyle = scanPat; ctx.globalAlpha = 0.6 + Math.sin(T * 60) * 0.05; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1;
+  ctx.drawImage(vig, 0, 0);
+  if (flash > 0) { ctx.fillStyle = robotWake > 0 && mode === 'dream' ? `rgba(255,107,107,${flash * 0.4})` : `rgba(234,252,255,${flash * 0.35})`; ctx.fillRect(0, 0, W, H); }
+  if (robotWake > 0 && robotWake < 50 && mode === 'dream') { ctx.globalAlpha = Math.min(0.5, robotWake * 0.3); for (let i = 0; i < 6; i++) { const y = Math.random() * H; ctx.drawImage(cv, 0, y, W, 12, (Math.random() - 0.5) * 40, y, W, 12); } ctx.globalAlpha = 1; }
+  ctx.restore();
+}
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.033, (now - last) / 1000); last = now;
+  update(dt); render();
+  requestAnimationFrame(frame);
+}
+enterRoom();
+requestAnimationFrame(frame);
+</script>

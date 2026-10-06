@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 512 512">
+  <defs>
+    <path id="arm-l" d="M226 304 L174 304 Q130 304 130 260 L130 208 Q130 184 153 184 Q176 184 176 208 L176 258 L226 258 Z"/>
+    <path id="arm-r" d="M286 240 L338 240 Q382 240 382 196 L382 160 Q382 136 359 136 Q336 136 336 160 L336 194 L286 194 Z"/>
+    <path id="body" d="M210 152 Q210 104 256 104 Q302 104 302 152 L302 380 L210 380 Z"/>
+    <path id="pot" d="M168 362 L344 362 L344 396 L330 396 L316 446 L196 446 L182 396 L168 396 Z"/>
+    <clipPath id="arm-l-c"><use xlink:href="#arm-l"/></clipPath>
+    <clipPath id="arm-r-c"><use xlink:href="#arm-r"/></clipPath>
+    <clipPath id="body-c"><use xlink:href="#body"/></clipPath>
+    <clipPath id="pot-c"><use xlink:href="#pot"/></clipPath>
+    <g id="petals">
+      <circle cx="256" cy="74" r="13"/>
+      <circle cx="279" cy="91" r="13"/>
+      <circle cx="270" cy="117" r="13"/>
+      <circle cx="242" cy="117" r="13"/>
+      <circle cx="233" cy="91" r="13"/>
+    </g>
+  </defs>
+  <g stroke-linejoin="round" stroke-linecap="round">
+    <!-- arms -->
+    <use xlink:href="#arm-l" fill="#1d2433" stroke="#1d2433" stroke-width="28"/>
+    <use xlink:href="#arm-r" fill="#1d2433" stroke="#1d2433" stroke-width="28"/>
+    <g clip-path="url(#arm-l-c)">
+      <rect x="110" y="170" width="130" height="150" fill="#3fa34d"/>
+      <path d="M160 170 L190 170 L190 320 L110 320 L110 286 L150 286 Q160 286 160 270 Z" fill="#2f8a3d"/>
+      <path d="M142 214 L142 252" fill="none" stroke="#6cc477" stroke-width="9"/>
+    </g>
+    <g clip-path="url(#arm-r-c)">
+      <rect x="280" y="120" width="120" height="140" fill="#3fa34d"/>
+      <path d="M366 120 L400 120 L400 260 L280 260 L280 224 L340 224 Q366 224 366 196 Z" fill="#2f8a3d"/>
+      <path d="M348 160 L348 186" fill="none" stroke="#6cc477" stroke-width="9"/>
+    </g>
+    <!-- body -->
+    <use xlink:href="#body" fill="#1d2433" stroke="#1d2433" stroke-width="28"/>
+    <g clip-path="url(#body-c)">
+      <rect x="200" y="90" width="120" height="300" fill="#3fa34d"/>
+      <path d="M280 90 L320 90 L320 390 L280 390 Q288 250 280 90 Z" fill="#2f8a3d"/>
+      <path d="M240 130 L240 360 M270 126 L270 360" fill="none" stroke="#33903f" stroke-width="6"/>
+      <path d="M224 150 L224 240" fill="none" stroke="#6cc477" stroke-width="9"/>
+    </g>
+    <!-- spines -->
+    <path d="M226 280 l-8 -6 M226 280 l-8 6 M290 200 l8 -6 M290 200 l8 6 M256 330 l-6 -8 M256 330 l6 -8 M152 236 l-8 -5 M366 172 l8 -5 M256 196 l-6 -8 M256 196 l6 -8" fill="none" stroke="#e9f7dc" stroke-width="4"/>
+    <!-- flower -->
+    <use xlink:href="#petals" fill="#1d2433" stroke="#1d2433" stroke-width="20"/>
+    <use xlink:href="#petals" fill="#ff7ab0"/>
+    <circle cx="276" cy="112" r="9" fill="#e5558f"/>
+    <circle cx="248" cy="80" r="5" fill="#ffb3d1"/>
+    <circle cx="256" cy="98" r="11" fill="#ffc93c" stroke="#1d2433" stroke-width="6"/>
+    <!-- pot -->
+    <use xlink:href="#pot" fill="#1d2433" stroke="#1d2433" stroke-width="28"/>
+    <g clip-path="url(#pot-c)">
+      <rect x="160" y="350" width="200" height="110" fill="#6c8bb0"/>
+      <path d="M300 396 L360 396 L360 460 L300 460 Z" fill="#536f93"/>
+      <rect x="160" y="350" width="200" height="12" fill="#6c8bb0"/>
+      <rect x="320" y="362" width="40" height="34" fill="#536f93"/>
+      <path d="M186 374 L250 374" fill="none" stroke="#93aeca" stroke-width="8"/>
+      <path d="M206 414 L212 432" fill="none" stroke="#93aeca" stroke-width="8"/>
+    </g>
+    <path d="M182 396 L330 396" fill="none" stroke="#1d2433" stroke-width="8.5"/>
+  </g>
+</svg>

@@ -1,0 +1,885 @@
+<title>I Am The Dot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=Patrick+Hand&display=swap" rel="stylesheet">
+<style>
+:root{
+  color-scheme: dark;
+  --bg:#070b12; --ink:#e6f0f4; --laser:#ff2a3a; --mint:#5fe0c0; --amber:#ffb23e; --steel:#1a2433;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--ink)}
+body{display:flex;align-items:center;justify-content:center;font-family:"Chakra Petch","Lucida Console",monospace;touch-action:none;user-select:none;-webkit-user-select:none}
+#c{display:block;background:#0b1320;box-shadow:0 0 0 2px #1d2a3b,0 10px 40px #000a}
+#touch{display:none;position:fixed;left:0;right:0;bottom:0;padding:10px 12px;justify-content:space-between;align-items:flex-end;pointer-events:none}
+#touch.on{display:flex}
+#touch .tg{display:grid;gap:6px;pointer-events:auto}
+#touch .dp{grid-template-columns:repeat(3,54px);grid-template-rows:repeat(2,54px)}
+#touch .ac{grid-template-columns:repeat(3,62px)}
+#touch button{width:100%;height:54px;border-radius:12px;border:2px solid #ffffff44;background:#1a2433cc;color:var(--ink);font:700 13px "Chakra Petch",monospace;touch-action:none}
+#touch .ac button{height:62px;border-radius:50%}
+#touch button.down{background:var(--laser);color:#fff}
+</style>
+<canvas id="c" width="960" height="540"></canvas>
+<div id="touch">
+  <div class="tg dp"><span></span><button data-k="u">&#9650;</button><span></span><button data-k="l">&#9664;</button><button data-k="d">&#9660;</button><button data-k="r">&#9654;</button></div>
+  <div class="tg ac"><button data-k="dim">DIM</button><button data-k="dash">FLICK</button><button data-k="wig">WIGGLE</button></div>
+</div>
+<script>
+// ===== Setup =====
+const W = 960, H = 540, FY = 500, G = 1500;
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
+function fit() { const s = Math.min(innerWidth / W, innerHeight / H); cv.style.width = Math.floor(W * s) + 'px'; cv.style.height = Math.floor(H * s) + 'px'; }
+addEventListener('resize', fit); fit();
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const pick = a => a[Math.random() * a.length | 0];
+const approach = (v, t, d) => v < t ? Math.min(t, v + d) : Math.max(t, v - d);
+const overlap = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+const FONT = "'Chakra Petch','Lucida Console',monospace", HAND = "'Patrick Hand','Comic Sans MS',cursive";
+
+// ===== Input =====
+const keys = {}, pressed = {};
+const KM = { ArrowLeft: 'l', KeyA: 'l', ArrowRight: 'r', KeyD: 'r', ArrowUp: 'u', KeyW: 'u', ArrowDown: 'd', KeyS: 'd',
+  Space: 'wig', KeyZ: 'wig', ShiftLeft: 'dash', ShiftRight: 'dash', KeyC: 'dim', KeyX: 'dim' };
+addEventListener('keydown', e => { const k = KM[e.code]; initAudio(); if (k) { e.preventDefault(); if (!keys[k]) pressed[k] = true; keys[k] = true; } });
+addEventListener('keyup', e => { const k = KM[e.code]; if (k) keys[k] = false; });
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+const touchEl = document.getElementById('touch');
+if (matchMedia('(pointer: coarse)').matches) touchEl.classList.add('on');
+touchEl.querySelectorAll('[data-k]').forEach(b => {
+  const k = b.dataset.k;
+  const on = e => { e.preventDefault(); initAudio(); if (!keys[k]) pressed[k] = true; keys[k] = true; b.classList.add('down'); };
+  const off = e => { e.preventDefault(); keys[k] = false; b.classList.remove('down'); };
+  b.addEventListener('pointerdown', on); b.addEventListener('pointerup', off);
+  b.addEventListener('pointercancel', off); b.addEventListener('pointerleave', off);
+});
+
+// ===== Audio =====
+let AC = null, master = null;
+function initAudio() {
+  if (AC) return;
+  try { AC = new (window.AudioContext || window.webkitAudioContext)(); master = AC.createGain(); master.gain.value = 0.45; master.connect(AC.destination); } catch (e) { AC = null; }
+}
+function tone(f, d, type = 'square', v = 0.12, f2 = 0, delay = 0) {
+  if (!AC) return;
+  try {
+    const t = AC.currentTime + delay, o = AC.createOscillator(), g = AC.createGain();
+    o.type = type; o.frequency.setValueAtTime(f, t); if (f2) o.frequency.exponentialRampToValueAtTime(f2, t + d);
+    g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(0.001, t + d);
+    o.connect(g); g.connect(master); o.start(t); o.stop(t + d + 0.02);
+  } catch (e) {}
+}
+function noise(d, v = 0.2, freq = 1200, delay = 0) {
+  if (!AC) return;
+  try {
+    const t = AC.currentTime + delay, n = Math.floor(AC.sampleRate * d), buf = AC.createBuffer(1, n, AC.sampleRate), ch = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) ch[i] = (Math.random() * 2 - 1) * (1 - i / n);
+    const s = AC.createBufferSource(), fl = AC.createBiquadFilter(), g = AC.createGain();
+    s.buffer = buf; fl.type = 'bandpass'; fl.frequency.value = freq; g.gain.value = v;
+    s.connect(fl); fl.connect(g); g.connect(master); s.start(t);
+  } catch (e) {}
+}
+function meow(pitch = 1) {
+  if (!AC) return;
+  try {
+    const t = AC.currentTime, o = AC.createOscillator(), fl = AC.createBiquadFilter(), g = AC.createGain();
+    o.type = 'sawtooth'; o.frequency.setValueAtTime(480 * pitch, t); o.frequency.linearRampToValueAtTime(820 * pitch, t + 0.1); o.frequency.linearRampToValueAtTime(430 * pitch, t + 0.38);
+    fl.type = 'bandpass'; fl.frequency.setValueAtTime(900, t); fl.frequency.linearRampToValueAtTime(1800, t + 0.12); fl.frequency.linearRampToValueAtTime(700, t + 0.38); fl.Q.value = 3;
+    g.gain.setValueAtTime(0.001, t); g.gain.linearRampToValueAtTime(0.22, t + 0.04); g.gain.exponentialRampToValueAtTime(0.001, t + 0.42);
+    o.connect(fl); fl.connect(g); g.connect(master); o.start(t); o.stop(t + 0.45);
+  } catch (e) {}
+}
+const sfx = {
+  wiggle: () => { tone(900, 0.05, 'square', 0.05, 1400); tone(1300, 0.05, 'square', 0.05, 800, 0.05); },
+  flick: () => { tone(1800, 0.08, 'sine', 0.08, 300); noise(0.06, 0.06, 4000); },
+  jump: () => tone(300, 0.12, 'triangle', 0.08, 520),
+  pounce: () => { noise(0.18, 0.15, 900); tone(220, 0.2, 'triangle', 0.1, 660); },
+  land: () => noise(0.07, 0.1, 400),
+  thud: () => { noise(0.18, 0.3, 200); tone(90, 0.2, 'sine', 0.2, 50); },
+  shatter: () => { for (let i = 0; i < 5; i++) tone(rand(1800, 3200), 0.12, 'triangle', 0.05, 0, i * 0.03); noise(0.25, 0.25, 3000); },
+  click: () => { tone(1200, 0.04, 'square', 0.08); tone(600, 0.06, 'square', 0.06, 0, 0.04); },
+  buzz: () => tone(110, 0.4, 'sawtooth', 0.12, 90),
+  alarm: () => { for (let i = 0; i < 4; i++) tone(i % 2 ? 520 : 780, 0.18, 'square', 0.09, 0, i * 0.18); },
+  crash: () => { noise(0.4, 0.35, 600); tone(160, 0.3, 'sawtooth', 0.1, 40); },
+  win: () => [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.25, 'square', 0.08, 0, i * 0.12)),
+  pad: () => [392, 523, 659].forEach((f, i) => tone(f, 0.12, 'triangle', 0.1, 0, i * 0.07)),
+  bleep: () => tone(rand(160, 300), 0.035, 'square', 0.035),
+  spark: () => noise(0.12, 0.12, 5000),
+};
+
+// ===== Live AI =====
+let sample = null;          // live AI function, or null
+(async () => {
+  try { if (window.claude && window.claude.use) sample = await window.claude.use("sample"); } catch (e) { sample = null; }
+})();
+let aiBusy = false, aiDisabled = false, aiOn = false;
+async function askAI(prompt, fallback) {
+  // returns a string; never throws; never more than one call in flight
+  if (!sample || aiDisabled || aiBusy) return fallback();
+  aiBusy = true;
+  try {
+    const { text } = await sample(prompt, { modelTier: "quick", cache: false });
+    return (text || "").trim() || fallback();
+  } catch (e) {
+    if (["not_granted","sampling_disabled","not_declared","capability_disabled","capability_removed"].includes(e && e.code)) aiDisabled = true;
+    return fallback();
+  } finally { aiBusy = false; }
+}
+async function askAIJSON(prompt, fallback) {
+  // structured variant of askAI: same guards, returns an object
+  if (!sample || aiDisabled || aiBusy) return fallback();
+  if (typeof sample.json !== 'function') {
+    const t = await askAI(prompt, () => '');
+    try { const m = t.match(/\{[\s\S]*\}/); return m ? JSON.parse(m[0]) : fallback(); } catch (e) { return fallback(); }
+  }
+  aiBusy = true;
+  try {
+    const r = await sample.json(prompt, { modelTier: "quick", cache: false });
+    let o = r && typeof r === 'object' && !('mood' in r) ? (r.json || r.data || r.object || r.value || r) : r;
+    if (typeof o === 'string') o = JSON.parse(o);
+    if (o && typeof o.text === 'string' && !o.mood) { const m = o.text.match(/\{[\s\S]*\}/); if (m) o = JSON.parse(m[0]); }
+    return o || fallback();
+  } catch (e) {
+    if (["not_granted","sampling_disabled","not_declared","capability_disabled","capability_removed"].includes(e && e.code)) aiDisabled = true;
+    return fallback();
+  } finally { aiBusy = false; }
+}
+const aiLive = () => !!(aiOn && sample && !aiDisabled);
+
+// ===== Cat moods & thoughts =====
+const MOODS = ['Curious', 'Lazy', 'Zoomies', 'Offended'];
+const MP = {
+  Curious: { speed: 180, accel: 1500, decel: 1700, jump: 172, col: '#5fe0c0', icon: '?' },
+  Lazy: { speed: 100, accel: 700, decel: 1400, jump: 150, col: '#8fa6ff', icon: 'z' },
+  Zoomies: { speed: 300, accel: 2400, decel: 400, jump: 182, col: '#ffb23e', icon: '»' },
+  Offended: { speed: 150, accel: 1100, decel: 1500, jump: 166, col: '#ff6a7a', icon: '#' },
+};
+const THOUGHTS = {
+  start: ['that dot owes me money', 'red. small. MINE.', 'today I hunt the photon', 'smells like oil and destiny', 'I was napping. this better be good', 'the robot eye is leaking again', 'new room. new crimes.'],
+  success: ['I meant to do that', 'knocked it. no regrets', 'gravity: tested. still works.', 'another thing on the floor. good', 'chaos is my cardio', 'push it. watch it fall. purr.', 'I am the wrecking ball now'],
+  fail: ['the drone saw. I saw nothing.', 'you were SO close, dot', 'rude flying toaster', "I'm not mad. I'm Offended.", "this is the dot's fault", 'who invited the beepy thing'],
+  drone: ['bonk. you are welcome', 'birds are so loud in here', 'flying toaster: deleted', 'I swat what I want', 'that bird tasted like batteries'],
+  wrong: ['buttons are a social construct', 'I pressed it. it is art', 'numbers? I am a cat'],
+  idle: ['is the dot... laughing at me?', 'must... not... chase... (chasing)', 'my tail is also suspicious', 'warm metal floor. 10/10', 'zoom zoom zoom zoom', 'the dot knows things', 'I could catch it. I choose not to', 'if I fits I sits', 'one more lap of the factory'],
+  aion: ['my brain just got... cloudier?', 'I can hear the internet purr'],
+};
+const MOOD_FOR = { start: null, success: 'Zoomies', fail: 'Offended', drone: 'Zoomies', wrong: 'Offended', aion: 'Curious', idle: null };
+function scriptedCat(kind) {
+  let mood = MOOD_FOR[kind];
+  if (!mood) { const s = L.schedule || ['Curious']; mood = s[L.schedIdx % s.length]; }
+  return { mood, thought: pick(THOUGHTS[kind] || THOUGHTS.idle) };
+}
+function validateCat(o, fb) {
+  if (!o || typeof o !== 'object') return fb;
+  const m = typeof o.mood === 'string' ? MOODS.find(x => x.toLowerCase() === o.mood.trim().toLowerCase()) : null;
+  let t = typeof o.thought === 'string' ? o.thought.trim().replace(/^["']|["']$/g, '').slice(0, 50) : '';
+  if (!m && !t) return fb;
+  return { mood: m || fb.mood, thought: t || fb.thought };
+}
+function applyCat(r) { setMood(r.mood); say(r.thought, 4.5); L.moodT = 0; }
+function askCat(kind, desc) {
+  const fb = scriptedCat(kind);
+  if (!aiLive() || aiBusy) { applyCat(fb); return; }
+  say('…', 3);
+  const prompt = `You are a cat in a robot factory obsessively chasing a red laser dot (the dot is secretly sabotaging the factory with you).
+Location: ${L.name}. Goal: ${L.goal || 'none'}. Event: ${desc}. Current mood: ${cat.mood}.
+Reply with JSON only: {"mood": one of "Curious","Lazy","Zoomies","Offended", "thought": a funny cat thought, max 50 chars, lowercase}`;
+  askAIJSON(prompt, () => fb).then(o => applyCat(validateCat(o, fb)));
+}
+
+// ===== PA speaker =====
+const paQ = []; let pa = null;
+function announce(t) { if (paQ.length < 3) paQ.push(t); }
+function updatePA(dt) {
+  if (!pa && paQ.length) { pa = { text: paQ.shift(), n: 0, t: 0 }; tone(660, 0.15, 'sine', 0.08); tone(440, 0.25, 'sine', 0.08, 0, 0.15); }
+  if (!pa) return;
+  pa.t += dt;
+  const want = Math.min(pa.text.length, Math.floor((pa.t - 0.4) * 34));
+  while (pa.n < want) { pa.n++; if (pa.n % 3 === 0 && pa.text[pa.n] !== ' ') sfx.bleep(); }
+  if (pa.n >= pa.text.length && pa.t > pa.text.length / 34 + 3) pa = null;
+}
+const PA = {
+  drone: ['Security drone down. Cause: whiskers.', 'Attention: airspace violation by one (1) cat.', 'Drone {n} has been... batted. Please stop.'],
+  vase: ['Attention: a vase has achieved the floor.', 'Decorative ceramic integrity: zero.', 'Notice: the vase was load-bearing. Emotionally.'],
+  trace: ['Rogue photon traced. Resetting sector.', 'Unauthorized dot detected. Rebooting sector.', 'Laser anomaly logged. Please remain a pointer.'],
+  cat: ['Attention: an unauthorized cat is in sector {s}.', 'Reminder: the cat is not on the payroll.', 'Notice: fur detected in the clean zone.'],
+  wrong: ['Calibration sequence invalid. Paws detected.', 'Error: buttons pressed in a creative order.'],
+  cable: ['Cable bundle 7 has been... chewed.', 'Network latency: one cat.'],
+};
+const fmt = (s) => s.replace('{s}', L.idx + 1).replace('{n}', (stats.drones % 9) + 1);
+
+// ===== World helpers =====
+const R = (x, y, w, h, t = 'solid', extra = {}) => Object.assign({ x, y, w, h, t, belt: 0 }, extra);
+const OW = (x, y, w) => R(x, y, w, 10, 'oneway');
+const walls = () => [R(0, 0, 20, H, 'solid', { deco: 'wall' }), R(W - 20, 0, 20, H, 'solid', { deco: 'wall' }), R(0, 0, W, 20, 'solid', { deco: 'wall' })];
+const ODIM = { box: [30, 30, 1], crate: [40, 40, 1.6], vase: [18, 28, 0.8], switch: [40, 46, 1.8], oilcan: [26, 32, 1.2], part: [28, 24, 1] };
+function OB(kind, x, y) { const d = ODIM[kind]; return { kind, x, y: y - d[1], w: d[0], h: d[1], m: d[2], vx: 0, vy: 0, ox: x, oy: y - d[1], grounded: false, dead: false, rot: 0 }; }
+function DR(x1, x2, y, Lr, sp = 70) { return { x: (x1 + x2) / 2 - 20, y, w: 40, h: 18, x1, x2, dir: 1, sp, L: Lr, ang: 0, detect: 0, dead: false, crashed: false, vx: 0, vy: 0, rot: 0, ph: rand(0, 6), by: y }; }
+const BTN = (x, y, n, w = 44) => ({ x, y, w, n, on: false, done: false });
+const PAD = (x, w, label, id) => ({ x, y: FY, w, label, id, prog: 0, latch: false });
+
+// ===== Levels =====
+const LEVELS = [
+  { name: 'MAINTENANCE BAY', goal: 'Knock the MASTER SWITCH off its shelf', hint: 'Lead the cat up the shelves. It shoves whatever is in its way.',
+    robotX: 640, schedule: ['Curious', 'Zoomies', 'Curious'],
+    build: () => ({ solids: [...walls(), R(0, FY, W, 40), OW(120, 410, 170), OW(340, 330, 150), OW(560, 250, 200)],
+      objects: [OB('switch', 690, 250), OB('vase', 240, 410), OB('box', 600, FY), OB('box', 634, FY), OB('box', 616, FY - 30), OB('part', 400, 330), OB('vase', 600, 250)],
+      cat: 470, dot: [520, 450] }),
+    check: L => { const s = L.objects.find(o => o.kind === 'switch'); return s.grounded && s.y > FY - 80; },
+    status: L => 'master switch: ' + (L.objects.find(o => o.kind === 'switch').y > 300 ? 'FALLING!' : 'on shelf'),
+    startPA: 'Attention: Sector 1. Laser pointers are not toys.', clearPA: 'Master switch offline. Who keeps a cat in maintenance?' },
+  { name: 'LUBRICATION LINE', goal: 'Push the OIL CAN into the CONTROL PANEL', hint: 'Drones trace the DOT, not the cat. Dim (C) or flicker (Shift) to hide. Wiggle near a drone: the cat bats it.',
+    robotX: 620, schedule: ['Curious', 'Lazy', 'Zoomies'],
+    build: () => ({ solids: [...walls(), R(0, FY, W, 40), OW(60, 410, 150), OW(220, 320, 220), R(460, 410, 130, 90, 'solid', { deco: 'panel' })],
+      objects: [OB('oilcan', 380, 320), OB('vase', 240, 320), OB('vase', 120, 410), OB('crate', 30, FY), OB('box', 720, FY), OB('box', 752, FY), OB('box', 736, FY - 30), OB('part', 880, FY)],
+      drones: [DR(220, 640, 110, 200, 80), DR(120, 440, 190, 140, 55)], cat: 120, dot: [160, 450] }),
+    check: L => { const c = L.objects.find(o => o.kind === 'oilcan'), p = L.solids.find(s => s.deco === 'panel'); return overlap({ x: c.x - 4, y: c.y - 4, w: c.w + 8, h: c.h + 8 }, p); },
+    status: L => 'oil can → panel',
+    tick: L => { const c = L.objects.find(o => o.kind === 'oilcan'); if (c.x < 32 && c.grounded) { c.x = c.ox; c.y = c.oy; c.vx = c.vy = 0; announce('Oil can returned to shelf by a helpful robot.'); } },
+    startPA: 'Attention: Sector 2. Please keep fluids away from the panel.', clearPA: 'Control panel is... lubricated. Sparks are normal. Probably.' },
+  { name: 'CALIBRATION HALL', goal: 'Land the cat on buttons 1 → 2 → 3', hint: 'Wrong order resets the sequence. Plan the cat’s route.',
+    robotX: 600, schedule: ['Curious', 'Zoomies', 'Lazy'],
+    build: () => ({ solids: [...walls(), R(0, FY, W, 40), OW(720, 300, 190), OW(600, 410, 100), OW(400, 380, 160), OW(160, 400, 110)],
+      objects: [OB('box', 250, FY), OB('crate', 330, FY), OB('vase', 860, 300), OB('part', 520, 380), OB('box', 200, 400)],
+      buttons: [BTN(800, 300, 1), BTN(50, FY, 2), BTN(458, 380, 3)],
+      drones: [DR(280, 720, 110, 200, 85), DR(640, 900, 190, 160, 55)], cat: 320, dot: [360, 450] }),
+    check: L => L.seq >= 3,
+    status: L => 'sequence: ' + [1, 2, 3].map(n => n <= L.seq ? n + '✓' : n + '·').join('  '),
+    startPA: 'Attention: Sector 3. Calibration requires an authorized finger.', clearPA: 'Calibration complete. Authorized finger: a paw. Logging.' },
+  { name: 'CONVEYOR HALL', goal: 'Lure the cat across the belt into the SERVER ROOM', hint: 'The belt pushes back. Wiggle (Space) to make the cat pounce across.',
+    robotX: 600, schedule: ['Lazy', 'Curious', 'Zoomies'],
+    build: () => ({ solids: [...walls(), R(0, FY, 250, 40), R(250, FY, 450, 40, 'conv', { belt: -150 }), R(700, FY, 260, 40), R(760, 20, 24, 400, 'solid', { deco: 'wall' }), OW(430, 370, 110)],
+      objects: [OB('box', 600, FY), OB('vase', 470, 370)],
+      cables: [{ x: 764, y: 420, w: 16, h: 80, torn: false }],
+      drones: [DR(280, 680, 150, 210, 90), DR(810, 910, 110, 330, 40)], cat: 90, dot: [140, 450] }),
+    check: L => cat.x > 800,
+    status: L => cat.x > 760 ? 'almost...' : 'belt: AGAINST you',
+    tick: (L, dt) => { L.spawnT -= dt; if (L.spawnT <= 0 && L.objects.filter(o => !o.dead).length < 8) { L.spawnT = 2.6; const b = OB('box', 640, 300); b.y = 300; b.spawned = true; L.objects.push(b); }
+      for (const o of L.objects) if (o.spawned && !o.dead && o.grounded && o.x < 258) { o.dead = true; burst(o.x + 15, o.y + 15, '#c98a3a', 12); noise(0.15, 0.15, 900); } },
+    startPA: 'Attention: Sector 4. Server room is for authorized robots only.', clearPA: 'Attention: an unauthorized cat is in the server room. It is sitting on the warm ones.' },
+  { name: 'CORE CONTROL', goal: 'Make the cat SIT on the BIG RED BUTTON', hint: 'Get the cat on top of the button, then DIM the dot (C) so it sits.',
+    robotX: 700, schedule: ['Offended', 'Curious', 'Zoomies'],
+    build: () => ({ solids: [...walls(), R(0, FY, W, 40), R(420, 330, 120, 170, 'solid', { deco: 'pedestal' }), OW(250, 420, 110), OW(600, 420, 110), OW(60, 330, 120), OW(780, 330, 120)],
+      objects: [OB('vase', 100, 330), OB('vase', 840, 330), OB('crate', 300, FY), OB('box', 660, FY), OB('part', 700, FY)],
+      buttons: [BTN(455, 330, 0, 50)],
+      drones: [DR(340, 620, 100, 240, 70), DR(80, 380, 200, 180, 60), DR(580, 880, 200, 180, 60)], cat: 160, dot: [200, 450] }),
+    check: L => L.sitT > 0.7,
+    status: L => cat.state === 'sit' && L.onBig ? 'sitting... ' + Math.round(L.sitT / 0.7 * 100) + '%' : 'button: un-sat',
+    tick: (L, dt) => { L.onBig = cat.grounded && cat.gref && cat.gref.deco === 'pedestal' && Math.abs(cat.x + cat.w / 2 - 480) < 36; L.sitT = L.onBig && cat.state === 'sit' ? L.sitT + dt : 0; },
+    startPA: 'Attention: Sector 5. Do NOT sit on the big red button.', clearPA: 'Big red button... sat upon. Factory entering nap mode.' },
+];
+const START_ROOM = { name: 'START ROOM', dark: true, robotX: 560, schedule: ['Curious'],
+  build: () => ({ solids: [...walls(), R(0, FY, W, 40), OW(430, 400, 140)], objects: [OB('box', 485, 400)],
+    pads: [PAD(170, 130, 'AI ON', 'ai'), PAD(680, 130, 'START', 'start')], cat: 470, dot: [480, 455] }) };
+const WIN_ROOM = { name: 'FACTORY OFFLINE', dark: true, robotX: 480, schedule: ['Lazy'],
+  build: () => ({ solids: [...walls(), R(0, FY, W, 40)], objects: [], pads: [PAD(220, 130, 'AGAIN', 'again'), PAD(620, 130, 'TITLE', 'title')], cat: 470, dot: [480, 455] }) };
+
+// ===== Game state =====
+let L = null, scene = 'start', T = 0, shake = 0, robotFace = 0;
+const parts = [];
+const stats = { t0: 0, traces: 0, drones: 0, vases: 0, time: 0 };
+const dot = { x: 480, y: 450, vx: 0, vy: 0, dim: false, flick: 0, wig: 0, wcd: 0, dcd: 0, lx: 1, ly: 0, trail: [] };
+const cat = { x: 0, y: 0, w: 36, h: 24, vx: 0, vy: 0, face: 1, state: 'chase', st: 0, mood: 'Curious', grounded: false, coy: 0, jcd: 0, pouncing: false, sitT: 0, sq: 1, run: 0, thought: null, hist: [], drop: 0, loafCd: 4, gref: null, hitWall: 0 };
+
+function loadRoom(def, idx, retry) {
+  const b = def.build();
+  L = Object.assign({ def, idx, name: def.name, goal: def.goal, hint: def.hint, dark: !!def.dark, robotX: def.robotX, schedule: def.schedule, schedIdx: 0, moodT: 0,
+    objects: [], drones: [], buttons: [], cables: [], pads: [], phase: 'play', pt: 0, cardT: idx >= 0 ? 3 : 0, seq: 0, sitT: 0, spawnT: 1, catPA: false, age: 0, onBig: false }, b);
+  L.bg = makeBG(L);
+  cat.x = b.cat - cat.w / 2; cat.y = FY - cat.h; cat.vx = cat.vy = 0; cat.state = 'chase'; cat.pouncing = false; cat.hist = []; cat.sitT = 0; cat.gref = null;
+  dot.x = b.dot[0]; dot.y = b.dot[1]; dot.vx = dot.vy = 0; dot.flick = 0;
+  parts.length = 0; paQ.length = 0; pa = null;
+  if (!retry) setMood(L.schedule[0]);
+  if (idx >= 0 && !retry) { announce(def.startPA); askCat('start', `entering ${def.name}`); }
+}
+function setMood(m) { if (MOODS.includes(m)) { if (m !== cat.mood) meow(m === 'Zoomies' ? 1.3 : m === 'Lazy' ? 0.8 : 1); cat.mood = m; } }
+function say(t, d = 3.5) { cat.thought = { text: t, t: d }; }
+function burst(x, y, col, n = 10, sp = 220, g = 600) { for (let i = 0; i < n; i++) { const a = rand(0, Math.PI * 2), s = rand(sp * 0.3, sp); parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - sp * 0.3, life: rand(0.4, 0.9), col, sz: rand(2, 4), g }); } }
+function addShake(v) { shake = Math.max(shake, v * (RM ? 0.2 : 1)); }
+
+// ===== Physics =====
+function blockers() {
+  const out = []; for (const r of L.solids) if (r.t !== 'oneway') out.push(r);
+  for (const c of L.cables) if (!c.torn) out.push(c);
+  return out;
+}
+function shiftX(b, d, blk) {
+  const x0 = b.x; b.x += d;
+  for (const r of blk) if (r !== b && overlap(b, r)) b.x = d > 0 ? r.x - b.w : r.x + r.w;
+  return b.x - x0;
+}
+function moveBody(b, dt) {
+  const blk = blockers();
+  b.hitWall = 0;
+  const dx = (b.vx + (b.belt || 0)) * dt, moved = shiftX(b, dx, blk);
+  if (Math.abs(moved - dx) > 0.01) { b.hitWall = Math.sign(dx); b.vx = 0; }
+  const pb = b.y + b.h, wasG = b.grounded;
+  b.vy = Math.min(b.vy + G * dt, 1300); b.y += b.vy * dt;
+  b.grounded = false; b.belt = 0; let gref = null, impact = 0;
+  for (const r of blk) if (overlap(b, r)) { if (b.vy > 0) { impact = b.vy; b.y = r.y - b.h; b.grounded = true; gref = r; } else b.y = r.y + r.h; b.vy = 0; }
+  if (b.vy >= 0) {
+    const tops = [];
+    if (!(b.drop > 0)) for (const r of L.solids) if (r.t === 'oneway') tops.push(r);
+    for (const o of L.objects) if (o !== b && !o.dead) tops.push(o);
+    for (const r of tops) if (b.x + b.w > r.x + 2 && b.x < r.x + r.w - 2 && pb <= r.y + 1 && b.y + b.h >= r.y) { impact = Math.max(impact, b.vy); b.y = r.y - b.h; b.vy = 0; b.grounded = true; gref = r; }
+  }
+  if (gref && gref.t === 'conv') b.belt = gref.belt;
+  b.gref = gref; b.landed = !wasG && b.grounded ? impact : 0;
+}
+
+// ===== Dot =====
+function updateDot(dt) {
+  let ix = (keys.r ? 1 : 0) - (keys.l ? 1 : 0), iy = (keys.d ? 1 : 0) - (keys.u ? 1 : 0);
+  const n = Math.hypot(ix, iy) || 1; ix /= n; iy /= n;
+  if (ix || iy) { dot.lx = ix; dot.ly = iy; }
+  dot.dim = !!keys.dim;
+  const sp = dot.dim ? 200 : 360, k = Math.min(1, dt * 12);
+  dot.vx += (ix * sp - dot.vx) * k; dot.vy += (iy * sp - dot.vy) * k;
+  dot.x = clamp(dot.x + dot.vx * dt, 24, W - 24); dot.y = clamp(dot.y + dot.vy * dt, 24, FY - 2);
+  dot.flick -= dt; dot.wig -= dt; dot.wcd -= dt; dot.dcd -= dt;
+  if (pressed.dash && dot.dcd <= 0) {
+    const ox = dot.x, oy = dot.y;
+    dot.x = clamp(dot.x + dot.lx * 130, 24, W - 24); dot.y = clamp(dot.y + dot.ly * 130, 24, FY - 2);
+    dot.flick = 0.28; dot.dcd = 0.7; sfx.flick();
+    burst(ox, oy, '#ff2a3a', 8, 120, 0); burst(dot.x, dot.y, '#ff8090', 8, 120, 0);
+    if (cat.state === 'chase' || cat.state === 'sit') { cat.state = 'lost'; cat.st = 0.75; }
+  }
+  if (pressed.wig && dot.wcd <= 0 && !dot.dim) { dot.wig = 0.35; dot.wcd = 0.45; sfx.wiggle(); catWiggle(); }
+  dot.trail.push([dot.x, dot.y]); if (dot.trail.length > 8) dot.trail.shift();
+}
+const dotSeen = () => !dot.dim && dot.flick <= 0;
+
+// ===== Cat AI =====
+function catJump(h, dx, capped) {
+  const M = MP[cat.mood];
+  cat.vy = -Math.sqrt(2 * G * h); const t = Math.sqrt(2 * h / G);
+  cat.vx = clamp(dx / (t * 1.2), -M.speed * 1.7, M.speed * 1.7);
+  cat.jcd = (capped ? 0.9 : 0.4) + (cat.mood === 'Lazy' ? 0.5 : 0);
+  cat.grounded = false; cat.sq = 1.25; sfx.jump();
+}
+function catWiggle() {
+  if (cat.state === 'lost' || L.phase !== 'play' && L.idx >= 0) return;
+  if (cat.state === 'loaf') { cat.state = 'chase'; say('!!', 1); }
+  if (cat.mood === 'Offended' && Math.random() < 0.4) { say(pick(['no.', 'beneath me.', 'not for YOU', 'hmph']), 1.5); return; }
+  if (!(cat.grounded || cat.coy > 0) || cat.pouncing) return;
+  const cx = cat.x + cat.w / 2, cy = cat.y + cat.h / 2, dx = dot.x - cx, dy = dot.y - cy;
+  const T2 = clamp(Math.hypot(dx, dy) / 650, 0.32, 0.75);
+  cat.vx = clamp(dx / T2, -560, 560); cat.vy = clamp((dy - 0.5 * G * T2 * T2) / T2, -900, -260);
+  cat.pouncing = true; cat.grounded = false; cat.coy = 0; cat.state = 'chase'; cat.sq = 1.35; cat.jcd = 0.3;
+  sfx.pounce(); if (Math.random() < 0.3) meow(1.2);
+}
+function updateCat(dt) {
+  const M = MP[cat.mood], cx = cat.x + cat.w / 2, by = cat.y + cat.h;
+  cat.hist.push([dot.x, dot.y, T]); while (cat.hist.length > 2 && T - cat.hist[0][2] > 0.6) cat.hist.shift();
+  let tx = dot.x, ty = dot.y;
+  if (cat.mood === 'Offended') { tx = cat.hist[0][0]; ty = cat.hist[0][1]; }
+  cat.st -= dt; cat.jcd -= dt; cat.drop -= dt; cat.coy = cat.grounded ? 0.1 : cat.coy - dt;
+  if (cat.thought) { cat.thought.t -= dt; if (cat.thought.t <= 0) cat.thought = null; }
+  let want = 0; const dx = tx - cx;
+  if (cat.state === 'loaf' || cat.state === 'lost' || cat.state === 'snub') { if (cat.st <= 0) cat.state = 'chase'; }
+  else if (cat.state === 'sit') { if (!dot.dim) cat.state = 'chase'; }
+  if (cat.state === 'chase') {
+    if (dot.dim) {
+      if (cat.grounded && Math.abs(dot.x - cx) < 48 && Math.abs(cat.vx) < 60) { cat.sitT += dt; if (cat.sitT > 0.3) { cat.state = 'sit'; tone(140, 0.4, 'sine', 0.05); } }
+    } else {
+      cat.sitT = 0;
+      if (Math.abs(dx) > (cat.mood === 'Zoomies' ? 4 : 10)) want = Math.sign(dx);
+      if (cat.grounded && !cat.pouncing) {
+        cat.loafCd -= dt;
+        if (cat.loafCd <= 0) {
+          cat.loafCd = rand(4, 8);
+          if (cat.mood === 'Lazy' && Math.random() < 0.65) { cat.state = 'loaf'; cat.st = rand(2.5, 4.5); say(pick(['five more minutes', 'nah.', 'the dot can wait', 'zzz', 'wiggle if you want me']), 2.2); }
+          else if (cat.mood === 'Offended' && Math.random() < 0.5) { cat.state = 'snub'; cat.st = 1.4; cat.face = -Math.sign(dx) || 1; say('hmph.', 1.4); }
+        }
+      }
+      if (cat.state === 'chase' && cat.grounded && cat.jcd <= 0 && !cat.pouncing) {
+        const up = by - ty;
+        if (up > 45 && Math.abs(dx) < 170) catJump(Math.min(up + 26, M.jump), dx, up + 26 > M.jump);
+        else if (cat.hitWall && want) catJump(M.jump, want * 90, false);
+        else if (ty - by > 50 && Math.abs(dx) < 80 && cat.gref) {
+          if (cat.gref.t === 'oneway') cat.drop = 0.25;
+          else if (cat.gref.kind) catJump(30, dx >= 0 ? 70 : -70, false);
+        }
+      }
+    }
+  }
+  if (cat.state !== 'chase') want = 0;
+  if (cat.grounded) cat.vx = approach(cat.vx, want * M.speed, (want ? M.accel : M.decel) * dt);
+  else if (!cat.pouncing && want) cat.vx = approach(cat.vx, want * M.speed, M.accel * 0.35 * dt);
+  // cables tear when the cat barrels into them
+  for (const c of L.cables) if (!c.torn && (Math.abs(cat.vx) > 95 || cat.pouncing) && overlap({ x: cat.x + cat.vx * dt * 2 - 2, y: cat.y, w: cat.w + 4, h: cat.h }, c)) {
+    c.torn = true; burst(c.x + 8, c.y + 40, '#ffe14d', 26, 300); burst(c.x + 8, c.y + 40, '#5fe0c0', 12, 200); sfx.spark(); sfx.crash(); addShake(8); announce(pick(PA.cable)); say('ptooey. cables.', 2);
+  }
+  const vxBefore = cat.vx;
+  moveBody(cat, dt);
+  if (cat.landed) {
+    cat.sq = 0.72;
+    if (cat.pouncing) {
+      sfx.thud(); addShake(5); burst(cat.x + 18, cat.y + cat.h, '#9fb3c4', 10, 160);
+      for (const o of L.objects) if (!o.dead && Math.abs(o.x + o.w / 2 - cx) < 70 && Math.abs(o.y + o.h - (cat.y + cat.h)) < 40) { o.vy = -220 / o.m; o.vx += Math.sign(o.x + o.w / 2 - cx || 1) * 120 / o.m; }
+    } else if (cat.landed > 300) sfx.land();
+    cat.pouncing = false;
+  }
+  if (cat.grounded) cat.pouncing = false;
+  // push / smash objects
+  for (const o of L.objects) {
+    if (o.dead || cat.gref === o || !overlap(cat, o) || cat.y + cat.h <= o.y + 8) continue;
+    const dir = (cat.x + cat.w / 2) < (o.x + o.w / 2) ? 1 : -1;
+    if (cat.pouncing && Math.abs(vxBefore) > 150) { o.vx = vxBefore * 1.1 / o.m; o.vy = -280 / o.m; cat.vx = vxBefore * 0.5; noise(0.1, 0.2, 500); addShake(3); burst(o.x + o.w / 2, o.y + o.h / 2, '#ffb23e', 6, 150); }
+    const pen = dir > 0 ? cat.x + cat.w - o.x : o.x + o.w - cat.x;
+    const mv = shiftX(o, dir * pen * Math.min(1, 1 / o.m), blockers());
+    cat.x -= dir * (pen - Math.abs(mv));
+    if (Math.sign(vxBefore) === dir && !cat.pouncing) o.vx = vxBefore * 0.85;
+  }
+  // drones get batted by airborne cats
+  for (const d of L.drones) if (!d.dead && !cat.grounded && overlap(cat, { x: d.x - 6, y: d.y - 6, w: d.w + 12, h: d.h + 12 })) {
+    d.dead = true; d.vx = cat.vx * 0.7 + rand(-60, 60); d.vy = -320; stats.drones++;
+    sfx.crash(); addShake(9); burst(d.x + 20, d.y + 9, '#ffe14d', 20, 300); burst(d.x + 20, d.y + 9, '#9fb3c4', 12, 220);
+    announce(fmt(pick(PA.drone))); askCat('drone', 'the cat just batted a security drone out of the air');
+  }
+  if (Math.abs(cat.vx) > 25 && cat.state !== 'snub') cat.face = Math.sign(cat.vx);
+  else if (cat.state !== 'snub' && Math.abs(dot.x - cx) > 6) cat.face = Math.sign(dot.x - cx);
+  cat.run += Math.abs(cat.vx) * dt * 0.09;
+  cat.sq += (1 - cat.sq) * Math.min(1, dt * 10);
+  if (cat.y > H + 60) { cat.x = L.solids.length ? 100 : 100; cat.y = 100; cat.vy = 0; }
+}
+
+// ===== Objects, drones, buttons, pads =====
+function updateObjects(dt) {
+  for (const o of L.objects) {
+    if (o.dead) continue;
+    moveBody(o, dt);
+    if (o.grounded) o.vx = approach(o.vx, 0, 900 * dt);
+    o.rot = o.grounded ? o.rot * 0.8 : o.rot + o.vx * dt * 0.02;
+    if (o.landed > 520) {
+      if (o.kind === 'vase') { o.dead = true; stats.vases++; sfx.shatter(); burst(o.x + 9, o.y + 20, '#3fb6c9', 22, 260); burst(o.x + 9, o.y + 20, '#e6f0f4', 8, 200); addShake(4); announce(pick(PA.vase)); }
+      else { sfx.thud(); addShake(o.m * 3); burst(o.x + o.w / 2, o.y + o.h, '#6d7f94', 8, 140); if (o.kind === 'switch') burst(o.x + 20, o.y + 10, '#ffe14d', 20, 260); }
+    }
+    if (o.y > H + 40) { o.x = o.ox; o.y = o.oy; o.vx = o.vy = 0; }
+  }
+  // separate objects horizontally
+  const blk = blockers(), live = L.objects.filter(o => !o.dead);
+  for (let i = 0; i < live.length; i++) for (let j = i + 1; j < live.length; j++) {
+    const a = live[i], b = live[j];
+    if (!overlap(a, b)) continue;
+    const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+    if (oy < 6) continue;
+    const d = (a.x + a.w / 2) < (b.x + b.w / 2) ? 1 : -1, pen = d > 0 ? a.x + a.w - b.x : b.x + b.w - a.x;
+    shiftX(a, -d * pen / 2, blk); shiftX(b, d * pen / 2, blk);
+  }
+}
+function updateDrones(dt) {
+  for (const d of L.drones) {
+    if (d.dead) {
+      if (!d.crashed) { d.rot += dt * 9; moveBody(d, dt); if (d.grounded) { d.crashed = true; d.vx = 0; sfx.crash(); addShake(6); burst(d.x + 20, d.y + 9, '#ffb23e', 16, 240); } }
+      continue;
+    }
+    const c = d.x + 20;
+    if (c > d.x2) d.dir = -1; if (c < d.x1) d.dir = 1;
+    d.x += d.dir * d.sp * dt; d.y = d.by + Math.sin(T * 2 + d.ph) * 6;
+    d.ang = Math.sin(T * 1.2 + d.ph) * 0.35;
+    const ox = d.x + 20, oy = d.y + 16, vx = dot.x - ox, vy = dot.y - oy;
+    const a = Math.atan2(vx, vy), dist = Math.hypot(vx, vy);
+    const inCone = vy > 0 && dist < d.L && Math.abs(a - d.ang) < 0.34;
+    if (inCone && dotSeen() && L.phase === 'play') { d.detect += dt * 2.6; if (Math.random() < 0.3) tone(1400, 0.03, 'square', 0.03); }
+    else d.detect = Math.max(0, d.detect - dt * 1.5);
+    if (d.detect >= 1 && L.phase === 'play') fail();
+  }
+}
+function updateButtons() {
+  for (const b of L.buttons) {
+    const on = cat.grounded && Math.abs(cat.y + cat.h - b.y) < 3 && cat.x + cat.w / 2 > b.x - 4 && cat.x + cat.w / 2 < b.x + b.w + 4;
+    if (on && !b.on && b.n > 0) {
+      if (b.done) {}
+      else if (b.n === L.seq + 1) { b.done = true; L.seq++; sfx.click(); burst(b.x + 22, b.y, '#5fe0c0', 14, 200); announce(['Calibration step one... acknowledged?', 'Step two. Who is doing this?', ''][b.n - 1] || ''); if (L.seq < 3) say(pick(['boop.', 'it clicked!', 'again again']), 1.5); }
+      else { L.seq = 0; for (const x of L.buttons) x.done = false; sfx.buzz(); addShake(4); announce(pick(PA.wrong)); askCat('wrong', `the cat pressed button ${b.n} out of order and the sequence reset`); }
+    }
+    b.on = on;
+  }
+}
+function updatePads(dt) {
+  for (const p of L.pads) {
+    const on = cat.grounded && cat.y + cat.h >= FY - 2 && cat.x + cat.w / 2 > p.x && cat.x + cat.w / 2 < p.x + p.w;
+    if (on && !p.latch) { p.prog += dt / 0.9; if (Math.random() < 0.2) tone(300 + p.prog * 500, 0.04, 'square', 0.03); }
+    else p.prog = Math.max(0, p.prog - dt * 2);
+    if (!on) p.latch = false;
+    if (p.prog >= 1) { p.prog = 0; p.latch = true; sfx.pad(); burst(p.x + p.w / 2, FY - 6, '#5fe0c0', 24, 260); padFire(p); }
+  }
+}
+function padFire(p) {
+  if (p.id === 'start') { stats.t0 = T; stats.traces = stats.drones = stats.vases = 0; scene = 'level'; loadRoom(LEVELS[0], 0); }
+  else if (p.id === 'ai') {
+    aiOn = !aiOn; p.label = aiOn ? 'AI OFF' : 'AI ON';
+    if (aiOn) { announce(sample ? 'Neural cat link: online. The cat is thinking out loud.' : 'Neural cat link unavailable. Cat remains scripted.'); askCat('aion', 'the cat just stepped on a pad that connected its brain to the cloud'); }
+    else { announce('Neural cat link: offline. Scripted cat engaged.'); }
+  }
+  else if (p.id === 'again') { stats.t0 = T; stats.traces = stats.drones = stats.vases = 0; scene = 'level'; loadRoom(LEVELS[0], 0); }
+  else if (p.id === 'title') { scene = 'start'; loadRoom(START_ROOM, -1); }
+}
+function fail() {
+  L.phase = 'fail'; L.pt = 1.8; stats.traces++; sfx.alarm(); addShake(10); robotFace = 2;
+  announce(pick(PA.trace)); askCat('fail', 'a security drone traced the laser dot, so the sector is resetting');
+}
+function clearLevel() {
+  L.phase = 'clear'; L.pt = 3.4; sfx.win(); addShake(8); robotFace = 3;
+  announce(L.def.clearPA); askCat('success', `the cat just completed the sabotage: ${L.goal}`);
+  for (let i = 0; i < 4; i++) burst(rand(100, 860), rand(100, 300), pick(['#ff2a3a', '#5fe0c0', '#ffb23e']), 16, 300);
+}
+
+// ===== Update =====
+function update(dt) {
+  T += dt; updateDot(dt); updateCat(dt); updateObjects(dt); updateDrones(dt); updatePads(dt); updatePA(dt);
+  if (L.buttons.length && L.idx === 2) updateButtons();
+  if (L.def.tick) L.def.tick(L, dt);
+  L.cardT -= dt; robotFace -= dt;
+  if (scene === 'level') {
+    L.moodT += dt;
+    if (L.moodT > 16 && L.phase === 'play') { L.moodT = 0; L.schedIdx++; const r = scriptedCat('idle'); applyCat(r); }
+    L.age += dt; if (!L.catPA && L.age > 8 && L.phase === 'play') { L.catPA = true; announce(fmt(pick(PA.cat))); }
+    if (L.phase === 'play' && L.def.check(L)) clearLevel();
+    if (L.phase !== 'play') {
+      L.pt -= dt;
+      if (L.pt <= 0) {
+        if (L.phase === 'fail') { const m = cat.mood, th = cat.thought; loadRoom(L.def, L.idx, true); cat.mood = m; cat.thought = th; }
+        else if (L.idx < LEVELS.length - 1) loadRoom(LEVELS[L.idx + 1], L.idx + 1);
+        else { stats.time = T - stats.t0; scene = 'win'; loadRoom(WIN_ROOM, -1); announce('All sectors offline. Thank you for choosing chaos.'); say('nap time. you did good, dot', 6); }
+      }
+    }
+  }
+  for (const p of parts) { p.vy += p.g * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt; }
+  for (let i = parts.length - 1; i >= 0; i--) if (parts[i].life <= 0) parts.splice(i, 1);
+  shake *= Math.pow(0.02, dt);
+  for (const k in pressed) pressed[k] = false;
+}
+
+// ===== Drawing: background & world =====
+function makeBG(Lv) {
+  const c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d');
+  const gr = g.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, '#0a1220'); gr.addColorStop(1, '#13223a');
+  g.fillStyle = gr; g.fillRect(0, 0, W, H);
+  g.strokeStyle = 'rgba(160,200,230,0.05)'; g.lineWidth = 2;
+  for (let x = 0; x < W; x += 120) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke(); }
+  for (let y = 80; y < H; y += 140) { g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke(); }
+  g.fillStyle = 'rgba(160,200,230,0.08)';
+  for (let x = 6; x < W; x += 120) for (let y = 86; y < H; y += 140) { g.fillRect(x, y, 3, 3); g.fillRect(x + 104, y, 3, 3); }
+  // pipes
+  g.fillStyle = '#18263a'; g.fillRect(0, 40, W, 12); g.fillStyle = '#22344d'; g.fillRect(0, 42, W, 3);
+  for (let x = 60; x < W; x += 180) { g.fillStyle = '#2b405c'; g.fillRect(x, 36, 10, 20); }
+  g.fillStyle = '#18263a'; g.fillRect(40, 52, 8, 200); g.fillRect(W - 60, 52, 8, 140);
+  // stencil
+  g.font = `700 150px ${FONT}`; g.textAlign = 'center'; g.fillStyle = 'rgba(160,200,230,0.04)';
+  g.fillText(Lv.idx >= 0 ? 'S-0' + (Lv.idx + 1) : Lv.dark && Lv.def === START_ROOM ? 'DOT' : 'OFF', W / 2, 330);
+  if (Lv.idx === 3) { // server racks
+    for (let i = 0; i < 3; i++) { const x = 800 + i * 46; g.fillStyle = '#0d1828'; g.fillRect(x, 300, 38, 200); g.strokeStyle = '#2b405c'; g.strokeRect(x, 300, 38, 200); for (let y = 310; y < 495; y += 14) { g.fillStyle = '#1b2a40'; g.fillRect(x + 4, y, 30, 9); } }
+    g.font = `700 14px ${FONT}`; g.fillStyle = 'rgba(95,224,192,0.5)'; g.fillText('SERVER ROOM', 860, 290);
+  }
+  // warning signs
+  g.fillStyle = 'rgba(255,178,62,0.12)'; g.font = `700 12px ${FONT}`; g.textAlign = 'left';
+  g.fillText('⚠ NO CATS BEYOND THIS POINT', 30, 120); g.fillText('LASER CLASS 3R', W - 150, 120);
+  return c;
+}
+function hazard(x, y, w, h) {
+  ctx.save(); ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
+  ctx.fillStyle = '#ffb23e'; ctx.fillRect(x, y, w, h); ctx.fillStyle = '#1a1206';
+  for (let i = -h; i < w; i += 16) { ctx.beginPath(); ctx.moveTo(x + i, y + h); ctx.lineTo(x + i + 8, y + h); ctx.lineTo(x + i + 8 + h, y); ctx.lineTo(x + i + h, y); ctx.fill(); }
+  ctx.restore();
+}
+function drawSolids() {
+  for (const r of L.solids) {
+    if (r.t === 'oneway') {
+      ctx.fillStyle = '#2a3a50'; ctx.fillRect(r.x, r.y, r.w, 10); ctx.fillStyle = '#4c6280'; ctx.fillRect(r.x, r.y, r.w, 3);
+      ctx.fillStyle = '#ffb23e'; ctx.fillRect(r.x, r.y + 8, r.w, 2);
+      ctx.strokeStyle = '#223047'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(r.x + 10, r.y + 10); ctx.lineTo(r.x + 24, r.y + 26); ctx.moveTo(r.x + r.w - 10, r.y + 10); ctx.lineTo(r.x + r.w - 24, r.y + 26); ctx.stroke();
+    } else if (r.t === 'conv') {
+      ctx.fillStyle = '#111823'; ctx.fillRect(r.x, r.y, r.w, r.h); ctx.fillStyle = '#29364a'; ctx.fillRect(r.x, r.y, r.w, 6);
+      const off = (T * -r.belt) % 30;
+      ctx.fillStyle = '#ffb23e';
+      for (let x = r.x - 30 + (30 - off); x < r.x + r.w; x += 30) if (x > r.x) { ctx.beginPath(); ctx.moveTo(x, r.y + 14); ctx.lineTo(x - 8, r.y + 20); ctx.lineTo(x, r.y + 26); ctx.lineTo(x + 4, r.y + 26); ctx.lineTo(x - 4, r.y + 20); ctx.lineTo(x + 4, r.y + 14); ctx.fill(); }
+      for (let x = r.x + 12; x < r.x + r.w; x += 36) { ctx.fillStyle = '#3a4a62'; ctx.beginPath(); ctx.arc(x, r.y + 33, 4, 0, 7); ctx.fill(); }
+      ctx.fillStyle = '#6d7f94'; for (let i = 0; i < 5; i++) ctx.fillRect(r.x + 2 + i * 4, r.y - 8 + (i % 2) * 3, 3, 10);
+    } else if (r.deco === 'panel') {
+      ctx.fillStyle = '#24344a'; ctx.fillRect(r.x, r.y, r.w, r.h); ctx.fillStyle = '#31475f'; ctx.fillRect(r.x, r.y, r.w, 6);
+      for (let i = 0; i < 3; i++) { ctx.fillStyle = (Math.floor(T * 3 + i) % 3) ? '#5fe0c0' : '#1a6b5c'; ctx.fillRect(r.x + 12 + i * 38, r.y + 16, 28, 18); }
+      for (let i = 0; i < 6; i++) { ctx.fillStyle = i % 2 ? '#ff2a3a' : '#ffb23e'; ctx.beginPath(); ctx.arc(r.x + 16 + i * 20, r.y + 52, 4, 0, 7); ctx.fill(); }
+      ctx.fillStyle = '#e6f0f4'; ctx.font = `700 10px ${FONT}`; ctx.textAlign = 'center'; ctx.fillText('CONTROL PANEL', r.x + r.w / 2, r.y + 74);
+    } else if (r.deco === 'pedestal') {
+      ctx.fillStyle = '#1c2838'; ctx.fillRect(r.x, r.y, r.w, r.h); hazard(r.x, r.y + 20, r.w, 14); hazard(r.x, r.y + r.h - 20, r.w, 14);
+      ctx.fillStyle = '#e6f0f4'; ctx.font = `700 11px ${FONT}`; ctx.textAlign = 'center'; ctx.fillText('DO NOT', r.x + r.w / 2, r.y + 70); ctx.fillText('SIT HERE', r.x + r.w / 2, r.y + 86);
+    } else {
+      ctx.fillStyle = '#1a2433'; ctx.fillRect(r.x, r.y, r.w, r.h);
+      if (r.y === FY) { ctx.fillStyle = '#2c3a4f'; ctx.fillRect(r.x, r.y, r.w, 4); }
+      else if (r.deco === 'wall' && r.h < H) { ctx.fillStyle = '#2c3a4f'; ctx.fillRect(r.x, r.y, 4, r.h); hazard(r.x, r.y + r.h - 12, r.w, 12); }
+    }
+  }
+  for (const c of L.cables) {
+    if (c.torn) { ctx.strokeStyle = '#3b8f7c'; ctx.lineWidth = 3; for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.moveTo(c.x + 2 + i * 4, c.y); ctx.quadraticCurveTo(c.x + i * 6 - 6, c.y + 16, c.x + i * 5 - 4 + Math.sin(T * 3 + i) * 3, c.y + 26); ctx.stroke(); } if (Math.random() < 0.05) burst(c.x + 4, c.y + 24, '#ffe14d', 2, 80); continue; }
+    const cols = ['#5fe0c0', '#ff2a3a', '#ffb23e', '#8fa6ff'];
+    for (let i = 0; i < 4; i++) { ctx.strokeStyle = cols[i]; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(c.x + 2 + i * 4, c.y); ctx.quadraticCurveTo(c.x + 2 + i * 4 + Math.sin(T * 2 + i) * 4, c.y + 40, c.x + 2 + i * 4, c.y + 80); ctx.stroke(); }
+  }
+}
+function drawObject(o) {
+  ctx.save(); ctx.translate(o.x + o.w / 2, o.y + o.h / 2); ctx.rotate(o.rot); const w = o.w, h = o.h;
+  if (o.kind === 'box' || o.kind === 'crate') {
+    ctx.fillStyle = o.kind === 'box' ? '#b07a3a' : '#5a6b80'; ctx.fillRect(-w / 2, -h / 2, w, h);
+    ctx.strokeStyle = o.kind === 'box' ? '#7a4f22' : '#33414f'; ctx.lineWidth = 2; ctx.strokeRect(-w / 2 + 1, -h / 2 + 1, w - 2, h - 2);
+    ctx.beginPath(); ctx.moveTo(-w / 2, -h / 2); ctx.lineTo(w / 2, h / 2); ctx.moveTo(w / 2, -h / 2); ctx.lineTo(-w / 2, h / 2); ctx.stroke();
+  } else if (o.kind === 'vase') {
+    ctx.fillStyle = '#3fb6c9'; ctx.beginPath(); ctx.moveTo(-4, -14); ctx.lineTo(4, -14); ctx.quadraticCurveTo(12, 0, 6, 14); ctx.lineTo(-6, 14); ctx.quadraticCurveTo(-12, 0, -4, -14); ctx.fill();
+    ctx.fillStyle = '#e6f0f4'; ctx.fillRect(-7, -1, 14, 3);
+  } else if (o.kind === 'switch') {
+    ctx.fillStyle = '#7f90a3'; ctx.fillRect(-20, -15, 40, 38); ctx.fillStyle = '#ff2a3a'; ctx.fillRect(-14, -9, 28, 10);
+    ctx.fillStyle = '#e6f0f4'; ctx.font = `700 8px ${FONT}`; ctx.textAlign = 'center'; ctx.fillText('MASTER', 0, -2);
+    ctx.strokeStyle = '#ffb23e'; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(0, 12); ctx.lineTo(o.y > 300 ? -12 : 10, -22); ctx.stroke();
+    ctx.fillStyle = '#ffb23e'; ctx.beginPath(); ctx.arc(o.y > 300 ? -12 : 10, -22, 4, 0, 7); ctx.fill();
+    ctx.fillStyle = (Math.floor(T * 4) % 2 && o.y < 300) ? '#5fe0c0' : '#123'; ctx.beginPath(); ctx.arc(0, 14, 3, 0, 7); ctx.fill();
+  } else if (o.kind === 'oilcan') {
+    ctx.fillStyle = '#3d8f4f'; ctx.fillRect(-13, -10, 26, 26); ctx.fillStyle = '#2b6a3a'; ctx.fillRect(-13, -10, 26, 4);
+    ctx.strokeStyle = '#9fb3c4'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(4, -10); ctx.lineTo(14, -18); ctx.stroke();
+    ctx.fillStyle = '#ffe14d'; ctx.font = `700 9px ${FONT}`; ctx.textAlign = 'center'; ctx.fillText('OIL', 0, 7);
+  } else if (o.kind === 'part') {
+    ctx.fillStyle = '#9fb3c4'; ctx.fillRect(-14, -12, 28, 24); ctx.fillStyle = '#0d1726'; ctx.fillRect(-10, -7, 20, 10);
+    ctx.fillStyle = '#5fe0c0'; ctx.fillRect(-7, -4, 4, 4); ctx.fillRect(3, -4, 4, 4);
+  }
+  ctx.restore();
+}
+function drawButtons() {
+  for (const b of L.buttons) {
+    if (b.n === 0) {
+      const pressed = cat.state === 'sit' && L.onBig;
+      ctx.fillStyle = '#3a4a62'; ctx.fillRect(b.x - 4, b.y - 6, b.w + 8, 6);
+      ctx.fillStyle = '#ff2a3a'; ctx.beginPath(); ctx.ellipse(b.x + b.w / 2, b.y - 6, b.w / 2, pressed ? 6 : 14, 0, Math.PI, 0); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.beginPath(); ctx.ellipse(b.x + b.w / 2 - 8, b.y - (pressed ? 9 : 14), 7, 3, 0, 0, 7); ctx.fill();
+      continue;
+    }
+    const next = b.n === L.seq + 1, pulse = next ? 0.5 + 0.5 * Math.sin(T * 6) : 0;
+    ctx.fillStyle = '#3a4a62'; ctx.fillRect(b.x - 3, b.y - 4, b.w + 6, 4);
+    ctx.fillStyle = b.done ? '#5fe0c0' : next ? `rgba(255,178,62,${0.6 + pulse * 0.4})` : '#8a6a3a'; ctx.fillRect(b.x, b.y - (b.on ? 5 : 9), b.w, b.on ? 5 : 7);
+    ctx.fillStyle = b.done ? '#5fe0c0' : '#ffb23e'; ctx.font = `700 18px ${FONT}`; ctx.textAlign = 'center'; ctx.fillText(b.n, b.x + b.w / 2, b.y - 16);
+  }
+}
+function drawPads() {
+  for (const p of L.pads) {
+    const col = p.id === 'ai' ? (aiOn ? '#5fe0c0' : '#8fa6ff') : '#ffb23e';
+    ctx.save(); ctx.shadowColor = col; ctx.shadowBlur = 18 + Math.sin(T * 4) * 6;
+    ctx.fillStyle = col; ctx.globalAlpha = 0.35; ctx.fillRect(p.x, FY - 4, p.w, 6); ctx.globalAlpha = 1;
+    ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.strokeRect(p.x, FY - 5, p.w, 7);
+    ctx.fillRect(p.x, FY - 5, p.w * p.prog, 7);
+    ctx.font = `700 22px ${FONT}`; ctx.textAlign = 'center'; ctx.fillText(p.label, p.x + p.w / 2, FY - 22);
+    ctx.restore();
+    ctx.fillStyle = 'rgba(230,240,244,0.5)'; ctx.font = `500 11px ${FONT}`; ctx.textAlign = 'center';
+    ctx.fillText(p.id === 'ai' ? (aiOn ? 'cat brain: cloud' : 'live AI cat thoughts') : p.id === 'start' ? 'begin sabotage' : '', p.x + p.w / 2, FY + 18);
+  }
+}
+
+// ===== Drawing: characters =====
+function drawCat() {
+  const cx = cat.x + cat.w / 2, by = cat.y + cat.h, f = cat.face;
+  const pose = cat.state === 'sit' ? 'sit' : cat.state === 'loaf' ? 'loaf' : !cat.grounded ? 'air' : 'run';
+  ctx.save(); ctx.translate(cx, by); ctx.scale(f * (2 - cat.sq), cat.sq);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  const fur = '#f2994a', dark = '#b85a22', ink = '#2a1408';
+  ctx.strokeStyle = fur; ctx.lineWidth = 5;
+  // tail
+  ctx.beginPath();
+  if (pose === 'sit') { ctx.moveTo(-8, -3); ctx.quadraticCurveTo(-22, 0, -16 + Math.sin(T * 3) * 3, -10); }
+  else { ctx.moveTo(-16, -13); ctx.quadraticCurveTo(-30, -14, -27 + Math.sin(T * 5) * 4, -32 - (cat.mood === 'Offended' ? 6 : 0)); }
+  ctx.stroke();
+  // legs
+  ctx.lineWidth = 4;
+  if (pose === 'run' || pose === 'air') {
+    const mv = Math.abs(cat.vx) > 20 ? 5 : 0;
+    [[-12, 0], [-6, 1], [7, 0.5], [13, 1.5]].forEach(([lx, ph], i) => {
+      let ex = lx + Math.sin(cat.run + ph * Math.PI) * mv, ey = 0;
+      if (pose === 'air') { ex = lx + (i > 1 ? 9 : -9); ey = -4; }
+      ctx.beginPath(); ctx.moveTo(lx, -9); ctx.lineTo(ex, ey); ctx.stroke();
+    });
+  } else if (pose === 'sit') { ctx.beginPath(); ctx.moveTo(8, -12); ctx.lineTo(8, 0); ctx.moveTo(12, -12); ctx.lineTo(12, 0); ctx.stroke(); }
+  // body
+  ctx.fillStyle = fur;
+  let hx = 15, hy = -21;
+  if (pose === 'sit') { ctx.beginPath(); ctx.ellipse(1, -14, 12, 13, -0.2, 0, 7); ctx.fill(); hx = 7; hy = -32; }
+  else if (pose === 'loaf') { ctx.beginPath(); ctx.ellipse(0, -9, 19, 9, 0, 0, 7); ctx.fill(); hx = 14; hy = -14; }
+  else { ctx.beginPath(); ctx.ellipse(0, -13, pose === 'air' ? 21 : 18, pose === 'air' ? 7.5 : 9, 0, 0, 7); ctx.fill(); }
+  ctx.strokeStyle = dark; ctx.lineWidth = 2.5;
+  if (pose !== 'sit') for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.moveTo(-10 + i * 7, (pose === 'loaf' ? -17 : -21)); ctx.lineTo(-12 + i * 7, (pose === 'loaf' ? -11 : -15)); ctx.stroke(); }
+  // head
+  ctx.fillStyle = fur; ctx.beginPath(); ctx.arc(hx, hy, 10, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(hx - 7, hy - 6); ctx.lineTo(hx - 4, hy - 16); ctx.lineTo(hx + 1, hy - 8); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(hx + 2, hy - 8); ctx.lineTo(hx + 7, hy - 16); ctx.lineTo(hx + 9, hy - 5); ctx.fill();
+  ctx.fillStyle = '#ff9fb0'; ctx.beginPath(); ctx.moveTo(hx - 5, hy - 8); ctx.lineTo(hx - 4, hy - 13); ctx.lineTo(hx - 1, hy - 8); ctx.fill();
+  ctx.fillStyle = '#ffd9b0'; ctx.beginPath(); ctx.ellipse(hx + 5, hy + 4, 5, 4, 0, 0, 7); ctx.fill();
+  // eyes
+  if (pose === 'loaf' || (cat.state === 'sit' && Math.sin(T * 1.3) > 0.6)) {
+    ctx.strokeStyle = ink; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(hx + 4, hy - 1, 2.5, 0, Math.PI); ctx.moveTo(hx - 0.5, hy - 1); ctx.arc(hx - 2, hy - 1, 2, 0, Math.PI); ctx.stroke();
+  } else {
+    let ex = (dot.x - cx) * f, ey = dot.y - (by + hy); const n = Math.hypot(ex, ey) || 1;
+    if (cat.state === 'lost') { ex = Math.sin(T * 9) * 10; ey = 0; }
+    const px = ex / n * 1.4, py = ey / n * 1.4, big = cat.pouncing || cat.mood === 'Zoomies';
+    ctx.fillStyle = '#f7ffd0'; ctx.beginPath(); ctx.arc(hx + 4, hy - 1, 3.6, 0, 7); ctx.arc(hx - 2.5, hy - 1, 3, 0, 7); ctx.fill();
+    ctx.fillStyle = ink; ctx.beginPath(); ctx.ellipse(hx + 4 + px, hy - 1 + py, big ? 2.6 : 1.4, 2.6, 0, 0, 7); ctx.ellipse(hx - 2.5 + px, hy - 1 + py, big ? 2.2 : 1.2, 2.2, 0, 0, 7); ctx.fill();
+    if (cat.mood === 'Offended' || cat.state === 'snub') { ctx.strokeStyle = ink; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(hx - 5, hy - 5); ctx.lineTo(hx + 7, hy - 4); ctx.stroke(); }
+    if (cat.mood === 'Lazy') { ctx.fillStyle = fur; ctx.fillRect(hx - 6, hy - 5, 14, 3); }
+  }
+  ctx.fillStyle = '#ff6f8a'; ctx.beginPath(); ctx.arc(hx + 9, hy + 2, 1.6, 0, 7); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 0.8; ctx.beginPath(); ctx.moveTo(hx + 8, hy + 4); ctx.lineTo(hx + 17, hy + 2); ctx.moveTo(hx + 8, hy + 5); ctx.lineTo(hx + 17, hy + 7); ctx.stroke();
+  ctx.restore();
+  if (cat.state === 'lost') { ctx.fillStyle = '#e6f0f4'; ctx.font = `700 18px ${FONT}`; ctx.textAlign = 'center'; ctx.fillText('?', cx, by - 44 + Math.sin(T * 8) * 2); }
+  if (cat.state === 'loaf') { ctx.fillStyle = '#8fa6ff'; ctx.font = `700 14px ${FONT}`; ctx.fillText('z', cx + 16 + Math.sin(T * 2) * 3, by - 30 - (T * 10 % 12)); }
+}
+function drawThought() {
+  if (!cat.thought) return;
+  const cx = cat.x + cat.w / 2, by = cat.y, M = MP[cat.mood];
+  ctx.font = `22px ${HAND}`; const tw = ctx.measureText(cat.thought.text).width + 44, h = 34;
+  const x = clamp(cx - tw / 2 + 20, 24, W - tw - 24), y = clamp(by - 78, 24, H - 120);
+  const a = Math.min(1, cat.thought.t * 3);
+  ctx.save(); ctx.globalAlpha = a;
+  ctx.fillStyle = '#e9f4f7'; ctx.beginPath(); ctx.arc(cx + 4, by - 14, 3, 0, 7); ctx.arc(cx + 10, by - 28, 5, 0, 7); ctx.fill();
+  roundRect(x, y, tw, h, 16); ctx.fill();
+  ctx.fillStyle = M.col; ctx.beginPath(); ctx.arc(x + 17, y + h / 2, 10, 0, 7); ctx.fill();
+  ctx.fillStyle = '#0d1726'; ctx.font = `700 13px ${FONT}`; ctx.textAlign = 'center'; ctx.fillText(M.icon, x + 17, y + h / 2 + 5);
+  ctx.font = `22px ${HAND}`; ctx.textAlign = 'left'; ctx.fillText(cat.thought.text, x + 32, y + 24);
+  ctx.restore();
+}
+function roundRect(x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+function drawDrone(d) {
+  const cx = d.x + 20, cy = d.y + 9;
+  if (!d.dead) {
+    const det = d.detect, a1 = d.ang - 0.34, a2 = d.ang + 0.34, oy = cy + 7;
+    const gr = ctx.createLinearGradient(cx, oy, cx, oy + d.L);
+    gr.addColorStop(0, det > 0.05 ? `rgba(255,42,58,${0.25 + det * 0.3})` : 'rgba(95,224,192,0.28)'); gr.addColorStop(1, 'rgba(95,224,192,0)');
+    ctx.fillStyle = gr; ctx.beginPath(); ctx.moveTo(cx, oy); ctx.lineTo(cx + Math.sin(a1) * d.L, oy + Math.cos(a1) * d.L); ctx.lineTo(cx + Math.sin(a2) * d.L, oy + Math.cos(a2) * d.L); ctx.closePath(); ctx.fill();
+  }
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(d.rot);
+  ctx.strokeStyle = '#6d7f94'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(-14, -6); ctx.lineTo(-22, -12); ctx.moveTo(14, -6); ctx.lineTo(22, -12); ctx.moveTo(0, -8); ctx.lineTo(0, -16); ctx.stroke();
+  if (!d.dead) { ctx.fillStyle = 'rgba(200,220,235,0.6)'; const rw = 10 + Math.sin(T * 60) * 4; ctx.fillRect(-22 - rw / 2, -14, rw, 2); ctx.fillRect(22 - rw / 2, -14, rw, 2); }
+  ctx.fillStyle = d.crashed ? '#4a5868' : '#9fb3c4'; roundRect(-20, -8, 40, 16, 6); ctx.fill();
+  ctx.fillStyle = '#ffb23e'; ctx.fillRect(-20, 2, 40, 3);
+  ctx.fillStyle = '#0d1726'; ctx.beginPath(); ctx.arc(0, 1, 5.5, 0, 7); ctx.fill();
+  ctx.fillStyle = d.dead ? (Math.random() < 0.3 ? '#ffe14d' : '#222') : d.detect > 0.05 ? '#ff2a3a' : '#5fe0c0'; ctx.beginPath(); ctx.arc(0, 1, 3, 0, 7); ctx.fill();
+  ctx.fillStyle = d.detect > 0.05 && !d.dead ? '#ff2a3a' : '#ffe14d'; ctx.beginPath(); ctx.arc(0, -16, 2, 0, 7); ctx.fill();
+  ctx.restore();
+  if (!d.dead && d.detect > 0.05) { ctx.fillStyle = '#ff2a3a'; ctx.fillRect(cx - 16, d.y - 24, 32 * d.detect, 4); ctx.strokeStyle = '#ff2a3a'; ctx.strokeRect(cx - 16, d.y - 24, 32, 4); }
+  if (d.crashed && Math.random() < 0.04) burst(cx, cy - 4, '#9fb3c4', 1, 30, -40);
+}
+function robotLens() { return { x: L.robotX, y: 100 }; }
+function drawRobot() {
+  const rx = L.robotX, ln = robotLens();
+  ctx.fillStyle = '#22344d'; ctx.fillRect(rx - 60, 20, 120, 7);
+  ctx.fillStyle = '#6d7f94'; ctx.fillRect(rx - 4, 27, 8, 28);
+  ctx.fillStyle = '#c9d6df'; roundRect(rx - 28, 54, 56, 38, 9); ctx.fill();
+  ctx.fillStyle = '#0d1726'; roundRect(rx - 22, 59, 44, 25, 5); ctx.fill();
+  const face = robotFace > 0 ? (L.phase === 'fail' ? 'O_O' : '>_<') : (dot.dim ? '-_-' : '•_•');
+  ctx.fillStyle = robotFace > 0 && L.phase === 'fail' ? '#ff2a3a' : '#5fe0c0'; ctx.font = `700 15px ${FONT}`; ctx.textAlign = 'center'; ctx.fillText(face, rx, 77);
+  const a = Math.atan2(dot.y - ln.y, dot.x - ln.x);
+  ctx.save(); ctx.translate(ln.x, ln.y - 6); ctx.rotate(a); ctx.fillStyle = '#6d7f94'; ctx.fillRect(0, -5, 16, 10); ctx.fillStyle = '#ff2a3a'; ctx.fillRect(14, -3, 4, 6); ctx.restore();
+  ctx.fillStyle = '#8fa6ff'; ctx.font = `500 9px ${FONT}`; ctx.fillText('LZR-9', rx, 102 - 12 + 22);
+}
+function drawBeam() {
+  if (dot.flick > 0) return;
+  const ln = robotLens(), a = dot.dim ? 0.06 : 0.22;
+  ctx.save(); ctx.strokeStyle = `rgba(255,42,58,${a})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(ln.x, ln.y - 6); ctx.lineTo(dot.x, dot.y); ctx.stroke(); ctx.restore();
+}
+function drawDot() {
+  if (dot.flick > 0 && Math.floor(T * 40) % 2) return;
+  let x = dot.x, y = dot.y;
+  if (dot.wig > 0) { x += Math.sin(T * 70) * 7; y += Math.cos(T * 53) * 4; }
+  const a = dot.dim ? 0.3 : 1;
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < dot.trail.length; i++) { const t = dot.trail[i]; ctx.fillStyle = `rgba(255,42,58,${0.05 * i * a})`; ctx.beginPath(); ctx.arc(t[0], t[1], 4, 0, 7); ctx.fill(); }
+  const g = ctx.createRadialGradient(x, y, 0, x, y, 26); g.addColorStop(0, `rgba(255,60,80,${0.9 * a})`); g.addColorStop(1, 'rgba(255,42,58,0)');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, 26, 0, 7); ctx.fill();
+  ctx.fillStyle = `rgba(255,230,235,${a})`; ctx.beginPath(); ctx.arc(x, y, dot.dim ? 3 : 4.5, 0, 7); ctx.fill();
+  ctx.restore();
+}
+
+// ===== Drawing: HUD, darkness, overlays =====
+const dk = document.createElement('canvas'); dk.width = W; dk.height = H; const dkx = dk.getContext('2d');
+function hole(x, y, r, a) { const g = dkx.createRadialGradient(x, y, 0, x, y, r); g.addColorStop(0, `rgba(0,0,0,${a})`); g.addColorStop(1, 'rgba(0,0,0,0)'); dkx.fillStyle = g; dkx.beginPath(); dkx.arc(x, y, r, 0, 7); dkx.fill(); }
+function drawDark() {
+  dkx.globalCompositeOperation = 'source-over'; dkx.clearRect(0, 0, W, H); dkx.fillStyle = 'rgba(3,5,10,0.93)'; dkx.fillRect(0, 0, W, H);
+  dkx.globalCompositeOperation = 'destination-out';
+  if (dot.flick <= 0) hole(dot.x, dot.y, dot.dim ? 70 : 160, 1);
+  hole(cat.x + cat.w / 2, cat.y + 10, 60, 0.6);
+  for (const p of L.pads) hole(p.x + p.w / 2, FY - 10, 110, 0.7);
+  hole(L.robotX, 70, 80, 0.5);
+  ctx.drawImage(dk, 0, 0);
+}
+function neon(t, x, y, size, col, a = 1) { ctx.save(); ctx.globalAlpha = a; ctx.font = `700 ${size}px ${FONT}`; ctx.textAlign = 'center'; ctx.shadowColor = col; ctx.shadowBlur = 16; ctx.fillStyle = col; ctx.fillText(t, x, y); ctx.restore(); }
+function drawStartText() {
+  const flick = Math.random() < 0.03 ? 0.4 : 1;
+  neon('I AM THE DOT', W / 2, 150, 64, '#ff2a3a', flick);
+  neon('a rogue laser pointer, one very motivated cat, and a factory that deserves it', W / 2, 182, 14, '#e6f0f4', 0.7);
+  const near = (x, y) => clamp(1.2 - Math.hypot(dot.x - x, dot.y - y) / 300, 0.3, 1);
+  const lines = [['ARROWS / WASD  move the dot (you)', 250, 250], ['SPACE  wiggle → the cat POUNCES', 710, 250], ['SHIFT  flicker → the cat loses you', 250, 300], ['C  dim → the cat SITS. drones can’t see you', 710, 300]];
+  for (const [t, x, y] of lines) neon(t, x, y, 15, '#5fe0c0', near(x, y));
+  neon('you can’t touch anything. the CAT can. lead it onto a pad.', W / 2, 352, 15, '#ffb23e', near(W / 2, 352));
+}
+function drawWinText() {
+  neon('FACTORY OFFLINE', W / 2, 140, 56, '#5fe0c0');
+  const m = Math.floor(stats.time / 60), s = Math.floor(stats.time % 60);
+  neon(`time ${m}:${String(s).padStart(2, '0')}   ·   traced ${stats.traces}x   ·   drones batted ${stats.drones}   ·   vases ${stats.vases}`, W / 2, 190, 16, '#e6f0f4', 0.85);
+  neon('the robot’s laser is free. the cat is asleep on the big red button.', W / 2, 240, 15, '#ffb23e', 0.8);
+}
+function drawHUD() {
+  ctx.textAlign = 'left';
+  if (scene === 'level') {
+    ctx.fillStyle = 'rgba(7,11,18,0.55)'; roundRect(26, 26, 470, 72, 8); ctx.fill();
+    ctx.fillStyle = '#8fa6ff'; ctx.font = `700 13px ${FONT}`; ctx.fillText(`SECTOR ${L.idx + 1}/5 · ${L.name}`, 38, 45);
+    ctx.fillStyle = '#ffb23e'; ctx.font = `700 17px ${FONT}`; ctx.fillText('▶ ' + L.goal, 38, 67);
+    ctx.fillStyle = '#5fe0c0'; ctx.font = `500 13px ${FONT}`; ctx.fillText(L.def.status(L), 38, 87);
+  }
+  const M = MP[cat.mood], bx = W - 210;
+  ctx.fillStyle = 'rgba(7,11,18,0.55)'; roundRect(bx, 26, 184, 56, 8); ctx.fill();
+  ctx.fillStyle = M.col; ctx.beginPath(); ctx.arc(bx + 24, 54, 15, 0, 7); ctx.fill();
+  ctx.fillStyle = '#0d1726'; ctx.font = `700 18px ${FONT}`; ctx.textAlign = 'center'; ctx.fillText(M.icon, bx + 24, 60);
+  ctx.textAlign = 'left'; ctx.fillStyle = '#e6f0f4'; ctx.font = `500 11px ${FONT}`; ctx.fillText('CAT MOOD', bx + 46, 46);
+  ctx.fillStyle = M.col; ctx.font = `700 17px ${FONT}`; ctx.fillText(cat.mood.toUpperCase(), bx + 46, 66);
+  ctx.textAlign = 'right'; ctx.font = `700 11px ${FONT}`; ctx.fillStyle = aiLive() ? '#5fe0c0' : '#6d7f94';
+  ctx.fillText(aiLive() ? (aiBusy ? 'AI: live …' : 'AI: live') : 'AI: scripted', W - 30, 98);
+  if (scene === 'level') { ctx.fillStyle = 'rgba(230,240,244,0.45)'; ctx.font = `500 11px ${FONT}`; ctx.fillText('SPACE wiggle · SHIFT flicker · C dim', W - 30, 113); }
+  // PA ticker in the floor strip
+  if (pa) {
+    ctx.textAlign = 'left'; ctx.fillStyle = 'rgba(7,11,18,0.8)'; ctx.fillRect(20, FY + 8, W - 40, 26);
+    ctx.fillStyle = '#ffb23e'; ctx.font = `700 13px ${FONT}`; ctx.fillText('◉ PA', 32, FY + 26);
+    ctx.fillStyle = '#e6f0f4'; ctx.font = `500 14px ${FONT}`; ctx.fillText(pa.text.slice(0, pa.n) + (Math.floor(T * 4) % 2 ? '_' : ''), 76, FY + 26);
+  }
+  // level title card
+  if (scene === 'level' && L.cardT > 0 && L.phase === 'play') {
+    const a = Math.min(1, L.cardT);
+    ctx.save(); ctx.globalAlpha = a; ctx.fillStyle = 'rgba(7,11,18,0.75)'; ctx.fillRect(0, 200, W, 110);
+    neon(`SECTOR ${L.idx + 1}: ${L.name}`, W / 2, 245, 30, '#ffb23e'); neon(L.hint, W / 2, 280, 15, '#e6f0f4', 0.9);
+    ctx.restore();
+  }
+  if (scene === 'level' && L.phase === 'fail') { ctx.fillStyle = `rgba(255,42,58,${0.15 + 0.1 * Math.sin(T * 20)})`; ctx.fillRect(0, 0, W, H); neon('DOT TRACED', W / 2, 260, 48, '#ff2a3a'); neon('resetting sector…', W / 2, 292, 16, '#e6f0f4'); }
+  if (scene === 'level' && L.phase === 'clear') { ctx.fillStyle = 'rgba(7,11,18,0.45)'; ctx.fillRect(0, 220, W, 90); neon('SABOTAGE COMPLETE', W / 2, 268, 44, '#5fe0c0'); neon(L.idx < 4 ? 'proceeding to next sector' : 'factory shutting down…', W / 2, 296, 15, '#e6f0f4'); }
+}
+function draw() {
+  ctx.save();
+  if (shake > 0.3) ctx.translate(rand(-shake, shake), rand(-shake, shake));
+  ctx.drawImage(L.bg, 0, 0);
+  if (L.idx === 4 && L.phase === 'clear') { ctx.fillStyle = `rgba(255,42,58,${0.2 + 0.2 * Math.sin(T * 12)})`; ctx.fillRect(0, 0, W, H); }
+  drawRobot(); drawSolids(); drawButtons();
+  for (const o of L.objects) if (!o.dead) drawObject(o);
+  for (const d of L.drones) drawDrone(d);
+  drawCat();
+  for (const p of parts) { ctx.globalAlpha = Math.min(1, p.life * 2); ctx.fillStyle = p.col; ctx.fillRect(p.x - p.sz / 2, p.y - p.sz / 2, p.sz, p.sz); }
+  ctx.globalAlpha = 1;
+  if (L.dark) { drawDark(); drawPads(); if (scene === 'start') drawStartText(); else drawWinText(); }
+  drawBeam(); drawDot(); drawThought();
+  ctx.restore();
+  drawHUD();
+}
+
+// ===== Main loop =====
+loadRoom(START_ROOM, -1);
+say('red dot? RED DOT.', 4);
+announce('Welcome, LZR-9. Your laser appears to be... thinking.');
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.033, (now - last) / 1000); last = now;
+  update(dt); draw();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>

@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 512 512">
+  <defs>
+    <circle id="ball" cx="256" cy="256" r="170"/>
+    <clipPath id="ball-c"><use xlink:href="#ball"/></clipPath>
+    <clipPath id="ball-lit"><circle cx="232" cy="230" r="166"/></clipPath>
+    <path id="white" d="M70 170 Q256 226 450 304 L450 352 Q256 272 70 218 Z"/>
+    <path id="blue" d="M166 84 Q218 256 306 440 L350 428 Q262 256 210 78 Z"/>
+  </defs>
+  <g stroke-linejoin="round" stroke-linecap="round">
+    <use xlink:href="#ball" fill="#1d2433" stroke="#1d2433" stroke-width="28"/>
+    <g clip-path="url(#ball-c)">
+      <!-- shadow layer -->
+      <rect x="70" y="70" width="372" height="372" fill="#e04848"/>
+      <use xlink:href="#white" fill="#d7dce6"/>
+      <use xlink:href="#blue" fill="#3383c2"/>
+      <!-- lit layer -->
+      <g clip-path="url(#ball-lit)">
+        <rect x="70" y="70" width="372" height="372" fill="#ff6b6b"/>
+        <use xlink:href="#white" fill="#ffffff"/>
+        <use xlink:href="#blue" fill="#4fa3e0"/>
+      </g>
+      <!-- band seams -->
+      <use xlink:href="#white" fill="none" stroke="#1d2433" stroke-width="6"/>
+      <use xlink:href="#blue" fill="none" stroke="#1d2433" stroke-width="6"/>
+      <!-- shine -->
+      <ellipse cx="172" cy="152" rx="40" ry="20" transform="rotate(-40 172 152)" fill="#ffffff" opacity="0.6"/>
+      <circle cx="132" cy="206" r="9" fill="#ffffff" opacity="0.6"/>
+    </g>
+  </g>
+</svg>

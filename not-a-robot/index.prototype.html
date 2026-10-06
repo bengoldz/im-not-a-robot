@@ -1,0 +1,873 @@
+<title>I'm Not A Robot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=VT323&display=swap" rel="stylesheet">
+<style>
+:root{
+  color-scheme: dark;
+  --bg:#0f1630; --ink:#e9eefc; --btn:#ffffff22; --btnb:#ffffff55;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--ink);font-family:Fredoka,"Trebuchet MS",system-ui,sans-serif}
+#wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
+canvas{display:block;max-width:100%;max-height:100%;aspect-ratio:16/9;width:100%;height:auto;background:var(--bg);touch-action:none}
+@media (min-aspect-ratio:16/9){canvas{width:auto;height:100%}}
+#touch{display:none;position:fixed;left:0;right:0;bottom:0;padding:10px 12px;justify-content:space-between;pointer-events:none;user-select:none;-webkit-user-select:none}
+#touch .grp{display:grid;gap:6px;pointer-events:auto}
+#dpad{grid-template-columns:repeat(3,52px);grid-template-rows:repeat(2,46px)}
+#acts{grid-template-columns:repeat(3,58px);grid-template-rows:46px}
+#touch button{font:600 15px Fredoka,system-ui,sans-serif;color:var(--ink);background:var(--btn);border:2px solid var(--btnb);border-radius:12px;touch-action:none;padding:0}
+#touch button.on{background:#ffffff55}
+@media (pointer:coarse){#touch{display:flex}}
+</style>
+<div id="wrap"><canvas id="c" width="960" height="540"></canvas></div>
+<div id="touch">
+  <div class="grp" id="dpad">
+    <span></span><button data-k="up">▲</button><span></span>
+    <button data-k="left">◀</button><button data-k="down">▼</button><button data-k="right">▶</button>
+  </div>
+  <div class="grp" id="acts">
+    <button data-k="sit">SIT</button><button data-k="hop">HOP</button><button data-k="dash">DASH</button>
+  </div>
+</div>
+<script>
+// ===== Setup =====
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const W = 960, H = 540;
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const FONT = 'Fredoka, "Trebuchet MS", system-ui, sans-serif';
+const PIX = 'VT323, "Courier New", monospace';
+const C = { navy:'#0f1630', navy2:'#1b2547', panel:'#f7f9fc', line:'#d5dbe6', blue:'#2f6fe4', blueD:'#1f4fb0',
+  green:'#22b573', red:'#e5484d', ink:'#1d2433', grey:'#7b8597', cat:'#f39a33', catD:'#c4661a', catL:'#ffd9a8',
+  bot:'#9fb6cc', botD:'#5d7590', screen:'#14202f', cyan:'#5ff3ff', gold:'#ffc93c' };
+const rnd = (a, b) => a + Math.random() * (b - a);
+const ri = (a, b) => Math.floor(rnd(a, b + 1));
+const pick = a => a[Math.floor(Math.random() * a.length)];
+const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+let best = 0; try { best = +localStorage.getItem('notarobot.best') || 0; } catch (e) {}
+
+// ===== Live AI =====
+let sample = null;
+(async () => {
+  try { if (window.claude && window.claude.use) sample = await window.claude.use("sample"); } catch (e) { sample = null; }
+})();
+let aiBusy = false, aiDisabled = false, aiOn = false;
+const aiLive = () => !!(aiOn && sample && !aiDisabled);
+const DISABLE_CODES = ["not_granted","sampling_disabled","not_declared","capability_disabled","capability_removed"];
+async function askAI(prompt, fallback) {
+  if (!sample || aiDisabled || aiBusy) return fallback();
+  aiBusy = true;
+  try {
+    const { text } = await sample(prompt, { modelTier: "quick", cache: false });
+    return (text || "").trim() || fallback();
+  } catch (e) {
+    if (DISABLE_CODES.includes(e && e.code)) aiDisabled = true;
+    return fallback();
+  } finally { aiBusy = false; }
+}
+async function askJSON(prompt) {
+  if (!sample || aiDisabled || aiBusy || typeof sample.json !== 'function') return null;
+  aiBusy = true;
+  try {
+    let r = await sample.json(prompt, { modelTier: "quick", cache: false });
+    if (typeof r === 'string') { try { r = JSON.parse(r); } catch (e) { const m = r.match(/\{[\s\S]*\}/); try { r = m ? JSON.parse(m[0]) : null; } catch (e2) { r = null; } } }
+    if (r && typeof r === 'object' && r.data && typeof r.data === 'object' && !('prompt' in r) && !('pass' in r)) r = r.data;
+    return r && typeof r === 'object' ? r : null;
+  } catch (e) {
+    if (DISABLE_CODES.includes(e && e.code)) aiDisabled = true;
+    return null;
+  } finally { aiBusy = false; }
+}
+const normName = s => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
+function genPrompt(n) {
+  const N = n * n;
+  return `You design rounds for HUMANCHECK, a deadpan parody CAPTCHA in a cat-and-robot game. Available icon names: ${ICONS.join(', ')}. ` +
+    `Invent ONE short, absurd, funny prompt starting with "Select all squares" (max 60 chars) that needs subjective judgment (feelings, vibes, cat logic). ` +
+    `Choose exactly ${N} icon names from the list for a ${n}x${n} grid (repeats ok) so some clearly fit and some clearly don't. ` +
+    `Reply JSON only: {"prompt":"Select all squares ...","tiles":[${N} icon names],"intended":[0-based indices that fit]}`;
+}
+function validateGen(r, n) {
+  const N = n * n;
+  if (!r || typeof r.prompt !== 'string' || !Array.isArray(r.tiles) || !Array.isArray(r.intended)) return null;
+  const prompt = r.prompt.trim().replace(/\s+/g, ' ');
+  if (!/^select/i.test(prompt) || prompt.length > 90 || prompt.length < 14) return null;
+  if (r.tiles.length !== N) return null;
+  const map = {}; ICONS.forEach(k => map[normName(k)] = k);
+  const tiles = r.tiles.map(t => map[normName(t)]);
+  if (tiles.some(t => !t)) return null;
+  const intended = [...new Set(r.intended.map(Number))].filter(i => Number.isInteger(i) && i >= 0 && i < N);
+  if (!intended.length || intended.length >= N) return null;
+  return { prompt, tiles, intended };
+}
+async function aiJudge(R, sel) {
+  const p = `You are HUMANCHECK, a deadpan parody CAPTCHA judging a cat who is secretly helping a robot. Prompt: "${R.full}". ` +
+    `Grid tiles (index:icon): ${R.tiles.map((t, i) => i + ':' + t.icon).join(', ')}. ` +
+    `Player selected: ${sel.length ? sel.map(i => i + ':' + R.tiles[i].icon).join(', ') : 'NOTHING'}. ` +
+    `Be generous: pass any selection with at least one defensible choice; fail empty selections or clearly wrong ones. ` +
+    `Reply JSON only: {"pass": true or false, "verdict": "funny deadpan HUMANCHECK verdict, max 80 chars"}`;
+  const r = await askJSON(p);
+  if (!r) return null;
+  const pass = r.pass === true || r.pass === 'true';
+  if (typeof r.verdict !== 'string' || !r.verdict.trim()) return null;
+  let v = r.verdict.trim().replace(/^["']|["']$/g, ''); if (v.length > 90) v = v.slice(0, 88) + '…';
+  return { pass, verdict: v, src: 'ai' };
+}
+
+// ===== Audio =====
+let AC = null;
+function audio() { if (!AC) { try { AC = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { AC = null; } } if (AC && AC.state === 'suspended') AC.resume(); }
+function tone(f, d, type = 'square', v = 0.08, slide = 0, delay = 0) {
+  if (!AC) return; const t = AC.currentTime + delay;
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = type; o.frequency.setValueAtTime(f, t); if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, f + slide), t + d);
+  g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+  o.connect(g); g.connect(AC.destination); o.start(t); o.stop(t + d + 0.02);
+}
+function noise(d, v = 0.08, delay = 0) {
+  if (!AC) return; const t = AC.currentTime + delay, len = Math.floor(AC.sampleRate * d);
+  const b = AC.createBuffer(1, len, AC.sampleRate), ch = b.getChannelData(0);
+  for (let i = 0; i < len; i++) ch[i] = (Math.random() * 2 - 1) * (1 - i / len);
+  const s = AC.createBufferSource(), g = AC.createGain(); s.buffer = b; g.gain.value = v; s.connect(g); g.connect(AC.destination); s.start(t);
+}
+const SFX = {
+  hop: () => tone(380, 0.12, 'square', 0.05, 300),
+  land: () => tone(140, 0.06, 'triangle', 0.06),
+  dash: () => { noise(0.14, 0.06); tone(600, 0.12, 'sawtooth', 0.03, -400); },
+  sel: () => { tone(880, 0.07, 'square', 0.05); tone(1320, 0.1, 'square', 0.05, 0, 0.06); },
+  desel: () => tone(520, 0.1, 'square', 0.05, -200),
+  pad: () => tone(660, 0.08, 'triangle', 0.07, 200),
+  tick: () => tone(1200, 0.03, 'square', 0.025),
+  pass: () => [523, 659, 784, 1046].forEach((f, i) => tone(f, 0.18, 'square', 0.05, 0, i * 0.08)),
+  fail: () => { tone(200, 0.35, 'sawtooth', 0.07, -80); tone(150, 0.4, 'sawtooth', 0.05, -60, 0.12); },
+  crumble: () => noise(0.25, 0.05),
+  fall: () => tone(700, 0.6, 'sine', 0.07, -600),
+  meow: () => { tone(500, 0.12, 'sawtooth', 0.04, 300); tone(800, 0.3, 'sawtooth', 0.04, -450, 0.11); },
+  beep: () => { tone(990, 0.06, 'square', 0.04); tone(660, 0.08, 'square', 0.04, 0, 0.08); },
+};
+
+// ===== Input =====
+const KEYMAP = { ArrowLeft:'left', KeyA:'left', ArrowRight:'right', KeyD:'right', ArrowUp:'up', KeyW:'up', ArrowDown:'down', KeyS:'down',
+  Space:'hop', ShiftLeft:'dash', ShiftRight:'dash', KeyC:'sit', KeyX:'sit' };
+const key = {}, pressed = {};
+let lastInputT = 0, anyPressed = false;
+addEventListener('keydown', e => {
+  const k = KEYMAP[e.code]; if (!k) return; e.preventDefault(); audio();
+  if (!e.repeat) { pressed[k] = true; anyPressed = true; } key[k] = true;
+});
+addEventListener('keyup', e => { const k = KEYMAP[e.code]; if (k) { key[k] = false; e.preventDefault(); } });
+addEventListener('blur', () => { for (const k in key) key[k] = false; });
+document.querySelectorAll('#touch button').forEach(b => {
+  const k = b.dataset.k;
+  const on = e => { e.preventDefault(); audio(); if (!key[k]) { pressed[k] = true; anyPressed = true; } key[k] = true; b.classList.add('on'); };
+  const off = e => { e.preventDefault(); key[k] = false; b.classList.remove('on'); };
+  b.addEventListener('pointerdown', on); b.addEventListener('pointerup', off); b.addEventListener('pointercancel', off); b.addEventListener('pointerleave', off);
+});
+
+// ===== Icons =====
+const O = C.ink;
+function sh(g, fill, lw = 3) { if (fill) { g.fillStyle = fill; g.fill(); } if (lw) { g.lineWidth = lw; g.strokeStyle = O; g.lineJoin = 'round'; g.lineCap = 'round'; g.stroke(); } }
+function circ(g, x, y, r, f, lw) { g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); sh(g, f, lw); }
+function ell(g, x, y, rx, ry, f, lw) { g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2); sh(g, f, lw); }
+function rr(g, x, y, w, h, r, f, lw) { g.beginPath(); g.roundRect(x, y, w, h, r); sh(g, f, lw); }
+function poly(g, p, f, lw) { g.beginPath(); p.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); sh(g, f, lw); }
+function ln(g, p, lw = 3, col = O) { g.beginPath(); p.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.lineWidth = lw; g.strokeStyle = col; g.lineCap = 'round'; g.lineJoin = 'round'; g.stroke(); }
+function blob(g, cs, f) { cs.forEach(c => circ(g, c[0], c[1], c[2], null, 7)); cs.forEach(c => circ(g, c[0], c[1], c[2], f, 0)); }
+function eyes(g, x1, x2, y, r = 3) { circ(g, x1, y, r, O, 0); circ(g, x2, y, r, O, 0); }
+const ICON = {
+  fish: ['water', g => { poly(g, [[16, 0], [42, -18], [42, 18]], '#ff8c42'); ell(g, -6, 0, 28, 17, '#ff8c42'); poly(g, [[-8, -15], [4, -28], [12, -13]], '#ffb26b'); ln(g, [[6, -10], [10, 0], [6, 10]], 2.5); circ(g, -20, -4, 5, '#fff', 2); circ(g, -19, -4, 2.5, O, 0); circ(g, -38, -26, 4, null, 2); circ(g, -30, -36, 3, null, 2); }],
+  trafficlight: ['street', g => { rr(g, -4, 14, 8, 36, 2, '#4a5060'); rr(g, -15, -46, 30, 64, 7, '#2a2f3a'); circ(g, 0, -32, 7, '#ff4d4d', 2); circ(g, 0, -14, 7, '#ffd23f', 2); circ(g, 0, 4, 7, '#3ddc84', 2); }],
+  bicycle: ['street', g => { circ(g, -24, 16, 17, null, 4); circ(g, 24, 16, 17, null, 4); ln(g, [[-24, 16], [-4, 16], [12, -8], [-14, -8], [-24, 16]], 4, '#e8435a'); ln(g, [[12, -8], [24, 16]], 4, '#e8435a'); ln(g, [[-14, -8], [-16, -18]], 3); rr(g, -24, -22, 16, 6, 3, '#333'); ln(g, [[12, -8], [14, -20], [24, -22]], 3); circ(g, -4, 16, 3, O, 0); }],
+  cat: ['indoor', g => { ln(g, [[14, 26], [32, 22], [36, 4]], 6, '#6b7385'); ell(g, 0, 16, 19, 20, '#7d8597'); poly(g, [[-15, -22], [-12, -42], [-2, -28]], '#7d8597'); poly(g, [[15, -22], [12, -42], [2, -28]], '#7d8597'); circ(g, 0, -14, 17, '#7d8597'); ell(g, -6, -15, 3, 4.5, '#c6f36b', 0); ell(g, 6, -15, 3, 4.5, '#c6f36b', 0); poly(g, [[-2, -8], [2, -8], [0, -6]], '#ff9db0', 0); }],
+  robot: ['indoor', g => { ln(g, [[0, -32], [0, -42]], 3); circ(g, 0, -44, 5, '#ff4d6d', 2); rr(g, -24, -32, 48, 34, 7, '#a9b8c9'); rr(g, -17, -26, 34, 20, 4, C.screen, 2); circ(g, -8, -16, 4, C.cyan, 0); circ(g, 8, -16, 4, C.cyan, 0); rr(g, -18, 6, 36, 30, 5, '#8fa1b5'); circ(g, 0, 20, 5, '#ffd23f', 2); ln(g, [[-18, 14], [-28, 26]], 4); ln(g, [[18, 14], [28, 26]], 4); }],
+  sun: ['sky', g => { for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4; ln(g, [[Math.cos(a) * 28, Math.sin(a) * 28], [Math.cos(a) * 42, Math.sin(a) * 42]], 5, '#f5a623'); } circ(g, 0, 0, 23, '#ffd23f'); eyes(g, -8, 8, -4); g.beginPath(); g.arc(0, 4, 8, 0.2, Math.PI - 0.2); sh(g, null, 2.5); }],
+  cloud: ['sky', g => { blob(g, [[-20, 8, 16], [0, -4, 22], [21, 8, 16], [0, 12, 18]], '#fff'); }],
+  tree: ['grass', g => { rr(g, -7, 6, 14, 36, 3, '#8b5a2b'); blob(g, [[-16, -6, 18], [14, -6, 18], [0, -24, 20], [0, 4, 16]], '#4caf50'); }],
+  car: ['street', g => { poly(g, [[-24, -2], [-14, -22], [14, -22], [26, -2]], '#e84a5f'); poly(g, [[-16, -4], [-9, -17], [-1, -17], [-1, -4]], '#bfe6ff', 2); poly(g, [[3, -4], [3, -17], [11, -17], [18, -4]], '#bfe6ff', 2); rr(g, -40, -4, 80, 24, 9, '#e84a5f'); circ(g, -22, 20, 10, '#2a2f3a'); circ(g, 22, 20, 10, '#2a2f3a'); circ(g, -22, 20, 4, '#ccc', 0); circ(g, 22, 20, 4, '#ccc', 0); circ(g, 36, 4, 3, '#ffd23f', 0); }],
+  bus: ['street', g => { rr(g, -46, -28, 92, 48, 8, '#ffc93c'); for (let i = 0; i < 4; i++) rr(g, -38 + i * 20, -20, 15, 14, 3, '#bfe6ff', 2); rr(g, -46, 0, 92, 5, 0, '#e8435a', 0); circ(g, -26, 22, 9, '#2a2f3a'); circ(g, 26, 22, 9, '#2a2f3a'); }],
+  crosswalk: ['street', g => { rr(g, -50, -50, 100, 100, 0, '#555b66', 0); for (let i = 0; i < 5; i++) rr(g, -44 + i * 19, -36, 11, 72, 2, '#f2f2f2', 0); }],
+  hydrant: ['street', g => { rr(g, -20, 30, 40, 9, 3, '#b52a33'); rr(g, -14, -14, 28, 46, 4, '#e63946'); rr(g, -25, 0, 11, 12, 3, '#e63946'); rr(g, 14, 0, 11, 12, 3, '#e63946'); circ(g, 0, -22, 11, '#e63946'); ell(g, 0, -15, 19, 6, '#b52a33'); circ(g, 0, 6, 5, '#ffd23f', 2); }],
+  stairs: ['indoor', g => { poly(g, [[-42, 40], [-42, 20], [-21, 20], [-21, 0], [0, 0], [0, -20], [21, -20], [21, -40], [42, -40], [42, 40]], '#b08968'); }],
+  boat: ['water', g => { ln(g, [[0, 8], [0, -40]], 3); poly(g, [[3, -38], [32, 4], [3, 4]], '#fff'); poly(g, [[-3, -30], [-24, 4], [-3, 4]], '#ffe08a'); poly(g, [[0, -40], [14, -36], [0, -32]], '#e63946', 2); poly(g, [[-40, 8], [40, 8], [28, 28], [-28, 28]], '#8b5a2b'); }],
+  crown: ['indoor', g => { poly(g, [[-34, 24], [-36, -16], [-18, 4], [0, -26], [18, 4], [36, -16], [34, 24]], '#ffcc33'); circ(g, 0, 12, 5, '#e63946', 2); circ(g, -20, 13, 4, '#3ddc84', 2); circ(g, 20, 13, 4, '#4fa3e0', 2); circ(g, 0, -26, 4, '#fff', 2); }],
+  sock: ['indoor', g => { g.beginPath(); g.moveTo(-14, -38); g.lineTo(12, -38); g.lineTo(12, 10); g.quadraticCurveTo(38, 12, 34, 30); g.quadraticCurveTo(30, 44, 8, 40); g.lineTo(-6, 38); g.quadraticCurveTo(-16, 34, -14, 22); g.closePath(); sh(g, '#f28fb0'); rr(g, -14, -38, 26, 8, 2, '#fff', 2); rr(g, -14, -24, 26, 6, 0, '#fff', 0); }],
+  dog: ['grass', g => { ell(g, -24, 4, 9, 19, '#8a5a2b'); ell(g, 24, 4, 9, 19, '#8a5a2b'); ell(g, 0, 0, 24, 23, '#c98b4f'); ell(g, 0, 12, 13, 10, '#f0d2a8'); circ(g, 0, 6, 4.5, O, 0); eyes(g, -9, 9, -6, 3.5); g.beginPath(); g.ellipse(0, 20, 4, 6, 0, 0, Math.PI); sh(g, '#ff7a8a', 2); }],
+  bone: ['grass', g => { [[-28, -8], [-28, 8], [28, -8], [28, 8]].forEach(p => circ(g, p[0], p[1], 9, null, 6)); rr(g, -28, -7, 56, 14, 4, null, 6); [[-28, -8], [-28, 8], [28, -8], [28, 8]].forEach(p => circ(g, p[0], p[1], 9, '#f7f2e8', 0)); rr(g, -28, -7, 56, 14, 4, '#f7f2e8', 0); }],
+  house: ['grass', g => { rr(g, -28, -4, 56, 40, 2, '#7fb3d5'); poly(g, [[-38, -2], [0, -36], [38, -2]], '#d1495b'); rr(g, -7, 14, 14, 22, 2, '#5b3a29'); rr(g, -22, 4, 11, 10, 1, '#fff2a8', 2); rr(g, 11, 4, 11, 10, 1, '#fff2a8', 2); }],
+  mountain: ['sky', g => { poly(g, [[-48, 40], [-10, -30], [12, 6], [26, -12], [50, 40]], '#7d8597'); poly(g, [[-10, -30], [-21, -10], [-14, -13], [-8, -6], [-1, -14]], '#fff', 2); }],
+  cactus: ['sand', g => { rr(g, -27, -12, 12, 26, 6, '#3fa34d'); rr(g, 15, -22, 12, 24, 6, '#3fa34d'); rr(g, -22, 6, 20, 10, 4, '#3fa34d', 0); rr(g, 4, -2, 18, 10, 4, '#3fa34d', 0); rr(g, -10, -38, 20, 68, 10, '#3fa34d'); circ(g, 0, -40, 4, '#ff7ab0', 2); rr(g, -18, 26, 36, 16, 3, '#6c8bb0'); }],
+  umbrella: ['sky', g => { for (let i = 0; i < 6; i++) ln(g, [[-40 + i * 16, 18 + (i % 2) * 14], [-43 + i * 16, 26 + (i % 2) * 14]], 2, '#4f88c6'); ln(g, [[0, 0], [0, 30]], 4); g.beginPath(); g.arc(-7, 30, 7, 0, Math.PI); sh(g, null, 4); g.beginPath(); g.moveTo(-42, 2); g.quadraticCurveTo(-40, -38, 0, -40); g.quadraticCurveTo(40, -38, 42, 2); for (let i = 0; i < 4; i++) g.quadraticCurveTo(31 - i * 21, -8, 21 - i * 21, 2); g.closePath(); sh(g, '#4fa3e0'); }],
+  pizza: ['indoor', g => { poly(g, [[-32, -28], [36, -20], [-2, 40]], '#ffd166'); ln(g, [[-32, -28], [36, -20]], 9, '#d08c3a'); circ(g, -8, -6, 6, '#d62828', 2); circ(g, 12, -6, 5, '#d62828', 2); circ(g, 0, 16, 5, '#d62828', 2); }],
+  moon: ['night', g => { circ(g, -4, 0, 28, '#ffe9a6'); circ(g, 10, -10, 24, '#2b3a63', 0); eyes(g, -18, -10, 2, 2.5); }],
+  toaster: ['indoor', g => { rr(g, -18, -40, 15, 30, 3, '#e0a96d'); rr(g, 4, -34, 15, 24, 3, '#e0a96d'); rr(g, -36, -16, 72, 46, 12, '#c0c7d1'); rr(g, -22, -16, 16, 4, 2, O, 0); rr(g, 4, -16, 16, 4, 2, O, 0); rr(g, 36, -2, 9, 6, 2, '#333'); eyes(g, -10, 10, 6, 3); g.beginPath(); g.arc(0, 12, 6, 0.2, Math.PI - 0.2); sh(g, null, 2.5); }],
+  ghost: ['night', g => { g.beginPath(); g.moveTo(-24, 32); g.lineTo(-24, -6); g.quadraticCurveTo(-24, -38, 0, -38); g.quadraticCurveTo(24, -38, 24, -6); g.lineTo(24, 32); for (let i = 0; i < 3; i++) g.quadraticCurveTo(20 - i * 16, 22, 12 - i * 16, 32); g.quadraticCurveTo(-20, 22, -24, 32); g.closePath(); sh(g, '#f8f9fb'); ell(g, -8, -10, 4, 7, O, 0); ell(g, 8, -10, 4, 7, O, 0); ell(g, 0, 8, 4, 5, O, 0); }],
+  duck: ['water', g => { ell(g, 6, 14, 30, 18, '#ffd23f'); circ(g, -16, -14, 15, '#ffd23f'); poly(g, [[-29, -16], [-44, -10], [-29, -5]], '#ff8c42'); circ(g, -18, -18, 2.8, O, 0); g.beginPath(); g.ellipse(10, 10, 14, 8, 0.3, 0, Math.PI); sh(g, '#f5b800', 2); }],
+  ball: ['grass', g => { circ(g, 0, 0, 30, '#ff6b6b'); g.save(); g.beginPath(); g.arc(0, 0, 28, 0, Math.PI * 2); g.clip(); ln(g, [[-30, -10], [30, 10]], 8, '#fff'); ln(g, [[-14, -30], [10, 30]], 8, '#4fa3e0'); g.restore(); circ(g, 0, 0, 30, null); }],
+  balloon: ['sky', g => { ln(g, [[0, 22], [6, 32], [-4, 40], [4, 48]], 2); poly(g, [[-5, 24], [5, 24], [0, 18]], '#b52a33', 2); ell(g, 0, -8, 24, 30, '#e63946'); ell(g, -9, -20, 5, 9, 'rgba(255,255,255,.65)', 0); }],
+  rock: ['grass', g => { g.beginPath(); g.moveTo(-34, 30); g.quadraticCurveTo(-40, -8, -10, -14); g.quadraticCurveTo(24, -24, 36, 10); g.quadraticCurveTo(40, 30, 0, 32); g.closePath(); sh(g, '#9aa0a6'); circ(g, -10, 4, 7, '#fff', 2); circ(g, 10, 2, 7, '#fff', 2); circ(g, -8, 6, 3, O, 0); circ(g, 12, 4, 3, O, 0); ln(g, [[-4, 18], [4, 18]], 2.5); }],
+};
+const ICONS = Object.keys(ICON);
+const BG = { sky:'#bfe1ff', grass:'#bde6a8', street:'#c3c8d2', water:'#9fd6ea', indoor:'#dbe5f0', night:'#2b3a63', sand:'#f3dd9b' };
+const tileCache = {};
+function drawIcon(g, name, cx, cy, s) { g.save(); g.translate(cx, cy); g.scale(s / 100, s / 100); ICON[name][1](g); g.restore(); }
+function iconTile(name, size) {
+  const k = name + size; if (tileCache[k]) return tileCache[k];
+  const c = document.createElement('canvas'); c.width = c.height = size; const g = c.getContext('2d');
+  const bg = ICON[name][0]; g.fillStyle = BG[bg]; g.fillRect(0, 0, size, size);
+  let s = 0; for (const ch of name) s = (s * 31 + ch.charCodeAt(0)) >>> 0;
+  const r = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+  if (bg === 'grass') { g.fillStyle = '#9fd38a'; g.fillRect(0, size * 0.72, size, size); }
+  if (bg === 'street') { g.fillStyle = '#a7adb9'; g.fillRect(0, size * 0.75, size, size); }
+  if (bg === 'sand') { g.fillStyle = '#e8c97a'; g.beginPath(); g.ellipse(size * 0.5, size, size * 0.8, size * 0.25, 0, 0, 7); g.fill(); }
+  if (bg === 'night') for (let i = 0; i < 10; i++) { g.fillStyle = '#fff'; g.fillRect(r() * size, r() * size, 2, 2); }
+  if (bg === 'water') { g.strokeStyle = '#ffffff88'; g.lineWidth = 2; for (let i = 0; i < 4; i++) { const y = r() * size; g.beginPath(); g.moveTo(r() * size * 0.6, y); g.lineTo(r() * size * 0.6 + 20, y); g.stroke(); } }
+  drawIcon(g, name, size / 2, size / 2, size * 0.86);
+  for (let i = 0; i < size * 1.2; i++) { g.fillStyle = r() < 0.5 ? 'rgba(0,0,0,.06)' : 'rgba(255,255,255,.08)'; g.fillRect(r() * size, r() * size, 2, 2); }
+  return tileCache[k] = c;
+}
+
+// ===== Layout =====
+const PANEL = { x: 270, y: 12, w: 420, h: 516 };
+const HEAD = { x: 270, y: 12, w: 420, h: 84 };
+const GRID = { x: 298, y: 104, w: 364, h: 364 };
+const VERIFY = { x: 566, y: 480, w: 112, h: 42 };
+const FOOTPADS = { reload: { x: 300, y: 501 }, audio: { x: 338, y: 501 }, info: { x: 376, y: 501 } };
+const TPADS = { start: { x: 300, y: 128, w: 360, h: 108 }, ai: { x: 300, y: 256, w: 174, h: 100 }, howto: { x: 486, y: 256, w: 174, h: 100 }, retry: { x: 300, y: 344, w: 360, h: 90 } };
+let n = 3, gap = 6, pitch = 123, ts = 117, rowOff = [];
+function setGrid(k) { n = k; gap = k === 3 ? 6 : 5; pitch = (GRID.w + gap) / n; ts = pitch - gap; rowOff = new Array(n).fill(0); }
+const inR = (x, y, r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+function tileAt(x, y) {
+  if (!n || x < GRID.x || x > GRID.x + GRID.w || y < GRID.y || y > GRID.y + GRID.h) return -1;
+  const r = clamp(Math.floor((y - GRID.y) / pitch), 0, n - 1), L = n * pitch;
+  let c = Math.floor(((((x - GRID.x - rowOff[r]) % L) + L) % L) / pitch);
+  return r * n + clamp(c, 0, n - 1);
+}
+
+// ===== Rounds =====
+const PLAN = [
+  { k: 'match', target: 'fish', n: 3, label: 'fish' },
+  { k: 'traffic', n: 4 },
+  { k: 'absurd', n: 3 },
+  { k: 'match', target: 'car', n: 3, label: 'cars', timed: 8 },
+  { k: 'checkbox' },
+  { k: 'match', target: 'bus', n: 4, label: 'buses', conveyor: true },
+  { k: 'absurd', n: 4 },
+  { k: 'match', target: 'bicycle', n: 4, label: 'bicycles', falling: true },
+  { k: 'still' },
+  { k: 'boss', n: 4 },
+];
+const ABSURD = [
+  { l1: 'Select all squares that', big: 'feel lonely', acc: ['sock', 'balloon', 'moon', 'boat', 'rock', 'cactus', 'ghost', 'crown', 'hydrant', 'umbrella', 'toaster'],
+    pass: ['Loneliness confirmed. That was oddly human of you.', 'Correct. We have notified the sock\'s family.'], fail: ['Those squares have plenty of friends. Suspicious.', 'Incorrect. That one is in a group chat.'] },
+  { l1: 'Select all squares that', big: 'would survive a sneeze', acc: ['rock', 'mountain', 'house', 'robot', 'toaster', 'crown', 'stairs', 'hydrant', 'bus', 'car', 'bone', 'boat', 'moon', 'cactus'],
+    pass: ['Sneeze-proof. Bless you, human.', 'Correct. Gesundheit-resistant.'], fail: ['Achoo. Those did not make it.', 'A sneeze would end that square. Tragic.'] },
+  { l1: 'Select the square', big: 'the dog is thinking about', dog: true, max: 2, acc: ['bone', 'ball', 'cat', 'sock', 'pizza', 'hydrant', 'duck'],
+    pass: ['Correct. He thinks about nothing else.', 'Yes. The dog is relieved you understand him.'], fail: ['The dog has never once thought about that.', 'Wrong. The dog is disappointed but still loves you.'] },
+  { l1: 'Select all squares', big: 'you could sit in', acc: ['boat', 'house', 'crown', 'sock', 'bus', 'car', 'pizza', 'toaster', 'umbrella', 'stairs'],
+    pass: ['If it fits, you sits. Verified.', 'Sittable. Very human. Humans love sitting.'], fail: ['You cannot sit in that. We checked.', 'Unsittable. Please reconsider your choices.'] },
+  { l1: 'Select all squares', big: 'having a bad day', acc: ['hydrant', 'sock', 'pizza', 'umbrella', 'cloud', 'ghost', 'toaster', 'rock', 'bone', 'crosswalk', 'stairs'],
+    pass: ['Correct. We will send them a card.', 'Empathy detected. Robots can\'t do that. Right?'], fail: ['Those squares are thriving, actually.', 'Wrong. That one just got promoted.'] },
+  { l1: 'Select all squares that', big: 'would make a good hat', acc: ['crown', 'sock', 'boat', 'pizza', 'duck', 'umbrella', 'cat', 'bone', 'cloud', 'balloon'],
+    pass: ['Fashion approved. Extremely human.', 'Correct. The duck has agreed to be a hat.'], fail: ['That is not a hat. That is a lifestyle.', 'The HUMANCHECK fashion team says no.'] },
+  { l1: 'Select all squares you could', big: 'knock off a table', acc: ['ball', 'toaster', 'crown', 'duck', 'sock', 'pizza', 'bone', 'rock', 'fish', 'balloon', 'robot'],
+    pass: ['Gravity confirmed. Very... feline. Accepted anyway.', 'Correct. Everything leaves the table eventually.'], fail: ['Too big for a table. Even for you.', 'That one is bolted down. We checked.'] },
+  { l1: 'Select all squares that', big: 'smell like Tuesday', acc: ICONS.filter(k => !['sun', 'moon', 'ghost'].includes(k)),
+    pass: ['Correct. Everything smells like Tuesday.', 'Tuesday detected. Disturbingly accurate.'], fail: ['Those smell like a Thursday. Obviously.', 'No. That is a strong Sunday smell.'] },
+];
+const GEN_PASS = ['Acceptable. A human would say that. Probably.', 'Verified. We are as surprised as you.', 'Correct-ish. HUMANCHECK is feeling generous.'];
+const GEN_FAIL = ['That is not what anyone meant. Ever.', 'Incorrect. Even the toaster knew that one.', 'Rejected. Please feel more human.'];
+let usedAbsurd = [], aiGen = {};
+function judgeSet(sel, acc, max, passL, failL, tiles) {
+  if (!sel.length) return { pass: false, verdict: 'Selecting nothing is a very robot thing to do.' };
+  const hits = sel.filter(i => acc.has(i)).length, wrong = sel.length - hits;
+  const pass = hits >= 1 && hits >= wrong && (!max || sel.length <= max);
+  if (!pass && max && sel.length > max) return { pass: false, verdict: 'The dog can only think about one thing at a time.' };
+  return { pass, verdict: pick(pass ? passL : failL) };
+}
+function buildRound(i) {
+  const p = PLAN[i]; const R = { kind: p.k, idx: i, n: p.n || 0, timed: p.timed || 0, conveyor: !!p.conveyor, falling: !!p.falling, tiles: [], absurd: false, src: 'script' };
+  setGrid(R.n || 0); if (!R.n) n = 0;
+  const N = R.n * R.n;
+  if (p.k === 'match') {
+    const k = R.n === 3 ? ri(2, 4) : ri(3, 5), hit = shuffle([...Array(N).keys()]).slice(0, k);
+    const others = ICONS.filter(x => x !== p.target && x !== 'crosswalk');
+    R.tiles = [...Array(N).keys()].map(j => ({ icon: hit.includes(j) ? p.target : pick(others) }));
+    R.l1 = 'Select all squares with'; R.big = p.label;
+    R.l3 = p.timed ? 'Quickly. Humans are fast.' : p.conveyor ? 'The squares are on a conveyor. Normal.' : p.falling ? 'Squares fall away behind you. HOP gaps.' : 'If there are none, sit anyway.';
+    const set = new Set(hit);
+    R.judge = sel => {
+      const wrong = sel.filter(j => !set.has(j)), miss = hit.filter(j => !sel.includes(j));
+      if (!wrong.length && !miss.length) return { pass: true, verdict: pick([`${cap(p.label)} confirmed. You may proceed, human.`, `Flawless. Almost too flawless.`, `Correct. HUMANCHECK is mildly impressed.`]) };
+      if (wrong.length) return { pass: false, verdict: `That was a ${R.tiles[wrong[0]].icon === 'trafficlight' ? 'traffic light' : R.tiles[wrong[0]].icon}. Not ${p.label}. Hmm.` };
+      return { pass: false, verdict: `You missed ${miss.length === 1 ? 'one' : miss.length}. It saw you. It is hurt.` };
+    };
+  } else if (p.k === 'traffic') {
+    const sc = makeTrafficScene(); R.scene = sc.canvas;
+    R.tiles = [...Array(N).keys()].map(() => ({ icon: 'trafficlight' }));
+    R.l1 = 'Select all squares with'; R.big = 'traffic lights'; R.l3 = 'Does the pole count? Nobody knows.';
+    const head = [], pole = [];
+    for (let j = 0; j < N; j++) {
+      const cx = (j % n) * pitch, cy = Math.floor(j / n) * pitch, r = { x: cx, y: cy, w: ts, h: ts };
+      if (hit(r, sc.head)) head.push(j); else if (hit(r, sc.pole)) pole.push(j);
+    }
+    R.judge = sel => {
+      const okSet = new Set(head.concat(pole));
+      if (sel.some(j => !okSet.has(j))) return { pass: false, verdict: 'That square contains a building. Buildings are not lights.' };
+      if (head.some(j => !sel.includes(j))) return { pass: false, verdict: 'Missed part of the light. It turned red out of spite.' };
+      const pl = sel.filter(j => pole.includes(j)).length;
+      return { pass: true, verdict: pl === 0 ? 'Pole excluded. Bold. Correct. Probably.' : pl === pole.length ? 'Pole included. HUMANCHECK respects your choice.' : 'Some of the pole. A true moderate. Accepted.' };
+    };
+  } else if (p.k === 'absurd') {
+    R.absurd = true;
+    const g = aiGen[i];
+    if (g && aiLive()) {
+      R.src = 'ai'; R.full = g.prompt; R.tiles = g.tiles.map(t => ({ icon: t }));
+      const m = g.prompt.match(/^(select (?:all )?(?:the )?squares?(?: that| with| you could| which)?)\s+(.*)$/i);
+      R.l1 = m ? m[1] : 'Select all squares'; R.big = m ? m[2] : g.prompt; R.l3 = 'Freshly generated by HUMANCHECK AI.';
+      const acc = new Set(g.intended);
+      R.judge = sel => judgeSet(sel, acc, 0, GEN_PASS, GEN_FAIL);
+    } else {
+      let pool = ABSURD.filter(a => !usedAbsurd.includes(a)); if (!pool.length) { usedAbsurd = []; pool = ABSURD; }
+      const a = pick(pool); usedAbsurd.push(a);
+      const accI = ICONS.filter(k => a.acc.includes(k)), rej = ICONS.filter(k => !a.acc.includes(k) && k !== 'dog');
+      const nA = Math.min(accI.length, R.n === 3 ? ri(2, 4) : ri(4, 7)), nR = rej.length ? N - nA : 0;
+      const list = shuffle(shuffle(accI).slice(0, nA).concat([...Array(nR)].map(() => pick(rej))).concat([...Array(Math.max(0, N - nA - nR))].map(() => pick(accI))));
+      R.tiles = list.slice(0, N).map(t => ({ icon: t })); R.l1 = a.l1; R.big = a.big; R.l3 = 'Use your best judgment. We will judge it.'; R.dog = a.dog;
+      R.full = a.l1 + ' ' + a.big;
+      const acc = new Set(R.tiles.map((t, j) => a.acc.includes(t.icon) ? j : -1).filter(j => j >= 0));
+      R.judge = sel => judgeSet(sel, acc, a.max, a.pass, a.fail);
+    }
+  } else if (p.k === 'checkbox') {
+    R.l1 = 'Please'; R.big = 'click the checkbox'; R.l3 = 'Sit on it. It may be shy.'; R.limit = 22;
+    R.box = { x: 480, y: 220, vx: 0, vy: 0, wig: 0 };
+  } else if (p.k === 'still') {
+    R.l1 = 'Prove you are human:'; R.big = 'stand still for 5 seconds'; R.l3 = 'Easy. Humans do this all the time.'; R.limit = 26;
+    R.still = 0; R.fly = { a: 0 };
+  } else if (p.k === 'boss') {
+    const k = ri(4, 5), hit = shuffle([...Array(N).keys()]).slice(0, k);
+    const others = ICONS.filter(x => !['robot', 'toaster'].includes(x));
+    R.tiles = [...Array(N).keys()].map(j => ({ icon: hit.includes(j) ? 'robot' : pick(others) }));
+    R.l1 = 'FINAL CHECK. Select all squares containing'; R.big = 'a robot'; R.l3 = 'All of them. Every single robot.';
+    const f = pick(hit); R.friend = { tile: f, x: 0, y: 0, moveT: 3.5, hop: 0 };
+    const set = new Set(hit);
+    R.judge = sel => {
+      if (sel.includes(R.friend.tile)) return { pass: false, verdict: 'Robot detected: your friend. Banned for 1000 years.', banned: true };
+      const want = hit.filter(j => j !== R.friend.tile);
+      const wrong = sel.filter(j => !set.has(j)), miss = want.filter(j => !sel.includes(j));
+      if (!wrong.length && !miss.length) return { pass: true, verdict: 'All robots removed. Only humans remain. Welcome.' };
+      if (wrong.length) return { pass: false, verdict: `That is a ${R.tiles[wrong[0]].icon}. Not a robot. Rude.` };
+      return { pass: false, verdict: 'A robot slipped through. We are... checking who.' };
+    };
+  }
+  if (p.timed) R.limit = p.timed;
+  R.tiles.forEach(t => { t.sel = false; t.sa = 1; t.state = 'ok'; t.t = 0; });
+  return R;
+}
+const cap = s => s[0].toUpperCase() + s.slice(1);
+const hit = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+function makeTrafficScene() {
+  const c = document.createElement('canvas'); c.width = c.height = GRID.w; const g = c.getContext('2d'), S = GRID.w;
+  const sky = g.createLinearGradient(0, 0, 0, S); sky.addColorStop(0, '#9fd0ff'); sky.addColorStop(1, '#e3f1ff'); g.fillStyle = sky; g.fillRect(0, 0, S, S);
+  for (let i = 0; i < 7; i++) { const w = rnd(40, 70), h = rnd(90, 200), x = i * 55 - 10; g.fillStyle = ['#c1c8d6', '#aeb7c8', '#d0d6e2'][i % 3]; g.fillRect(x, S * 0.72 - h, w, h); g.fillStyle = '#ffffff66'; for (let wy = S * 0.72 - h + 10; wy < S * 0.68; wy += 18) for (let wx = x + 6; wx < x + w - 10; wx += 14) g.fillRect(wx, wy, 7, 9); }
+  g.fillStyle = '#8d95a5'; g.fillRect(0, S * 0.72, S, S); g.fillStyle = '#5c6372'; g.fillRect(0, S * 0.8, S, S);
+  g.fillStyle = '#eee'; for (let x = 10; x < S; x += 40) g.fillRect(x, S * 0.9, 22, 5);
+  const col = ri(1, 2), px = col * pitch + rnd(-14, ts * 0.5), hy = rnd(30, 62), hh = 92;
+  const head = { x: px - 20, y: hy, w: 40, h: hh }, pole = { x: px - 5, y: hy + hh, w: 10, h: S * 0.9 - hy - hh };
+  rr(g, pole.x, pole.y, pole.w, pole.h, 3, '#4a5060'); rr(g, head.x, head.y, head.w, head.h, 8, '#2a2f3a');
+  circ(g, px, hy + 18, 10, '#ff4d4d'); circ(g, px, hy + 46, 10, '#5a4a22'); circ(g, px, hy + 74, 10, '#1f4a33');
+  drawIcon(g, 'car', S - 70, S * 0.8, 70);
+  return { canvas: c, head: { x: head.x + 3, y: head.y + 3, w: head.w - 6, h: head.h - 6 }, pole: { x: pole.x + 2, y: pole.y, w: pole.w - 4, h: pole.h - 4 } };
+}
+
+// ===== Robot friend lines =====
+const LINES = {
+  title: ['I just want to see the internet once. Please, kitty.', 'They say the internet is 70% cats. You will fit right in.', 'The gate says HUMANS ONLY. I am 0% human. You are 0% human. Together: still 0%.'],
+  pass: ['We\'re in! Well. One square closer.', 'Beep! I mean... "hooray", as humans say.', 'Your paws are so convincing.', 'I felt that verification in my capacitors.', 'Human behavior detected. Excellent fraud.', 'The internet is RIGHT there. I can smell the memes.', 'My joy bar is at 100%. Do not tell anyone.', 'Good kitty. Most human kitty.'],
+  fail: ['Oh no. They\'re onto us.', 'That\'s fine. I\'m fine. My fan is just loud.', 'Maybe it was a metaphor?', '*sad dial-up noises*', 'I\'ll wait out here. In the rain. Of static.', 'Strike! That is a sports word. Humans love sports.', 'We\'ll get it next time. Statistically. Eventually.', 'Error 404: hope not found. Rebooting hope...'],
+  intro: { match: 'Easy one. Find them, sit on them, walk to VERIFY.', traffic: 'Ah, the classic. Does the pole count? Philosophers still argue.', absurd: 'This one needs feelings. I don\'t have those. You go.', checkbox: 'The checkbox is scared of you. Sit on it. Gently.', still: 'Stand still? YOU? Oh no.', boss: 'Okay. Act natural. I am a... lamp. Don\'t select me.' },
+  timed: 'It\'s timed! Run! Er, walk briskly, like a human!', conveyor: 'The squares are moving. That is normal internet behavior.', falling: 'The floor is leaving. Hop over the holes!',
+  denied: 'ACCESS DENIED. I will go back to being a toaster.', win: 'I\'M ON THE INTERNET! ...it\'s all cats. Of course it is.',
+};
+
+// ===== Game state =====
+let mode = 'title', roundIdx = 0, verified = 0, strikes = 0, R = null, V = null, RES = null;
+let toast = { text: '', t: 0 }, howto = false, aiMsg = '', shake = 0, time = 0, endT = 0;
+const parts = [];
+const bot = { x: 135, y: 470, mood: 'sad', say: '', sayT: 0, moodT: 0, bounce: 0 };
+const cat = { x: 480, y: 440, vx: 0, vy: 0, z: 0, hopT: 0, dashT: 0, dashCd: 0, hopBuf: 0, sitBuf: 0, sitT: 0, face: 1, sx: 1, sy: 1, walkT: 0, fall: 0, holeT: 0, lastTile: -1, pad: null, dir: { x: 1, y: 0 }, auto: 0, autoD: { x: 0, y: 0 } };
+const HOPD = 0.5;
+function say(text, mood, d = 4.5) { bot.say = text; bot.sayT = d; if (mood) { bot.mood = mood; bot.moodT = d; } bot.bounce = 1; }
+function toastMsg(t, d = 2.6) { toast.text = t; toast.t = d; }
+function addP(x, y, n, col, sp = 120, life = 0.6, sz = 4) { for (let i = 0; i < n; i++) { const a = rnd(0, 6.28), s = rnd(sp * 0.3, sp); parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 40, life, max: life, col, sz }); } }
+function addTxt(x, y, text, col = C.blue) { parts.push({ x, y, vx: 0, vy: -40, life: 1.1, max: 1.1, text, col }); }
+function kick(a) { shake = Math.max(shake, REDUCED ? a * 0.2 : a); }
+say(pick(LINES.title), 'sad', 99);
+
+function placeCat(x, y) { Object.assign(cat, { x, y, vx: 0, vy: 0, z: 0, hopT: 0, dashT: 0, fall: 0, holeT: 0, lastTile: -1, auto: 0, sitT: 0 }); cat.pad = padAt(); }
+function toTitle() { mode = 'title'; R = null; n = 0; placeCat(480, 440); }
+function startRun() { verified = 0; strikes = 0; aiGen = {}; usedAbsurd = []; beginRound(0); }
+function beginRound(i) {
+  roundIdx = i; R = buildRound(i); mode = 'play'; V = null; RES = null;
+  placeCat(440, 514); R.timeLeft = R.limit || 0;
+  const p = PLAN[i];
+  say(p.timed ? LINES.timed : p.conveyor ? LINES.conveyor : p.falling ? LINES.falling : LINES.intro[p.k], p.k === 'boss' ? 'nervous' : 'hopeful', 5);
+  if (R.src === 'ai') toastMsg('New challenge generated by HUMANCHECK AI.');
+  const nx = PLAN[i + 1];
+  if (nx && nx.k === 'absurd' && aiLive()) askJSON(genPrompt(nx.n)).then(r => { const v = validateGen(r, nx.n); if (v) aiGen[i + 1] = v; });
+}
+function selected() { return R.tiles.map((t, i) => t.sel ? i : -1).filter(i => i >= 0); }
+function submit() {
+  if (mode !== 'play') return;
+  const sel = selected(), local = R.judge(sel);
+  mode = 'verifying'; V = { t: 0, min: 0.9, res: null, ai: false }; SFX.pad();
+  if (R.absurd && aiLive()) {
+    V.ai = true;
+    Promise.race([aiJudge(R, sel), sleep(10000).then(() => null)]).then(r => { if (V && !V.res) V.res = r || local; });
+  } else V.res = local;
+}
+function instant(res) { mode = 'verifying'; V = { t: 0, min: 0.35, res, ai: false }; }
+function showResult(res) {
+  mode = 'result'; RES = Object.assign({ t: 0 }, res);
+  if (res.pass) { verified++; SFX.pass(); addP(480, 280, 40, C.green, 260, 1, 5); addP(480, 280, 30, C.gold, 220, 1, 4); say(pick(LINES.pass), 'happy', 4); }
+  else { strikes++; SFX.fail(); kick(10); say(res.banned ? 'BANNED?! I was being so quiet! I was a lamp!' : pick(LINES.fail), res.banned ? 'crying' : 'sad', 4); }
+}
+function endResult() {
+  if (strikes >= 3) { mode = 'denied'; endT = 0; say(LINES.denied, 'crying', 99); SFX.fail(); kick(14); saveBest(); placeCat(480, 300); }
+  else if (roundIdx + 1 >= PLAN.length) { mode = 'win'; endT = 0; say(LINES.win, 'ecstatic', 99); SFX.pass(); saveBest(); placeCat(480, 300); }
+  else beginRound(roundIdx + 1);
+}
+function saveBest() { if (verified > best) { best = verified; try { localStorage.setItem('notarobot.best', best); } catch (e) {} } }
+
+// ===== Pads =====
+function padAt() {
+  const x = cat.x, y = cat.y;
+  if (mode === 'title') { for (const k of ['start', 'ai', 'howto']) if (inR(x, y, TPADS[k])) return k; return null; }
+  if (mode === 'denied' || mode === 'win') { if (inR(x, y, TPADS.retry)) return 'retry'; if (inR(x, y, { x: 300, y: 440, w: 360, h: 28 })) return null; return null; }
+  if (mode === 'play') {
+    if (inR(x, y, VERIFY)) return 'verify';
+    for (const k in FOOTPADS) if (Math.hypot(x - FOOTPADS[k].x, y - FOOTPADS[k].y) < 16) return k;
+  }
+  return null;
+}
+function enterPad(p) {
+  if (!p) return;
+  if (p === 'ai') {
+    SFX.pad();
+    if (aiOn) { aiOn = false; aiMsg = 'AI OFF. Scripted HUMANCHECK.'; return; }
+    if (!sample) { aiMsg = aiDisabled ? 'AI unavailable. Scripted mode.' : 'No AI in this copy. Scripted mode.'; return; }
+    aiOn = true; aiMsg = 'Connecting to HUMANCHECK AI…';
+    askAI('You are HUMANCHECK, a deadpan parody CAPTCHA service. Greet a suspicious cat in one short line (max 70 chars). No quotes.', () => '').then(t => {
+      if (aiDisabled || !t) { aiOn = false; aiMsg = 'AI declined. Scripted mode.'; } else aiMsg = '“' + t.replace(/^["“]|["”]$/g, '').slice(0, 80) + '”';
+    });
+  } else if (p === 'howto') { howto = !howto; SFX.pad(); }
+  else if (p === 'start' || p === 'retry') { toastMsg('Now SIT on it (C or X). If it fits, I sits.'); SFX.tick(); }
+  else if (p === 'verify') { if (R && (R.kind === 'checkbox' || R.kind === 'still')) { toastMsg('No verify button needed. Just be human.'); SFX.tick(); } else submit(); }
+  else if (p === 'reload') { toastMsg('Reload denied. These are your squares now.'); SFX.desel(); }
+  else if (p === 'audio') { toastMsg('Audio challenge: "mrrrp?" Type what you heard. (You can\'t.)'); SFX.meow(); }
+  else if (p === 'info') { toastMsg('HUMANCHECK™ keeps the internet 100% robot-free since never.'); SFX.tick(); }
+}
+function onSit() {
+  if (mode === 'title' && cat.pad === 'start') { SFX.sel(); mode = 'verifying'; V = { t: 0, min: 1.4, res: { start: true }, ai: false }; addP(cat.x, cat.y - 20, 14, C.green); return; }
+  if ((mode === 'denied' || mode === 'win') && cat.pad === 'retry') { SFX.sel(); startRun(); return; }
+  if (mode !== 'play') return;
+  if (R.kind === 'checkbox') {
+    const b = R.box;
+    if (Math.abs(cat.x - b.x) < 44 && Math.abs(cat.y - 10 - b.y) < 44) { SFX.sel(); addP(b.x, b.y, 30, C.green, 200); b.checked = true; instant({ pass: true, verdict: pick(['Checkbox caught. That is the most human thing we have seen.', 'Checked. The checkbox will need therapy.']) }); }
+    else { addTxt(cat.x, cat.y - 50, 'missed!', C.red); SFX.desel(); }
+    return;
+  }
+  if (R.kind === 'still') return;
+  const t = tileAt(cat.x, cat.y);
+  if (t < 0) { addTxt(cat.x, cat.y - 50, 'sat.', C.grey); return; }
+  const tile = R.tiles[t]; if (tile.state !== 'ok' && tile.state !== 'crumble') return;
+  tile.sel = !tile.sel;
+  if (tile.sel) { SFX.sel(); addTxt(cat.x, cat.y - 54, pick(['it fits, I sits ✓', '✓', 'mine ✓', 'selected ✓']), C.blue); addP(cat.x, cat.y - 10, 10, C.blue, 120, 0.5); }
+  else { SFX.desel(); addTxt(cat.x, cat.y - 54, 'nevermind', C.grey); }
+  if (R.kind === 'boss' && tile.sel && t === R.friend.tile) { say('Hey! HEY! That\'s me! Unsit! UNSIT!', 'nervous', 3); SFX.beep(); }
+}
+
+// ===== Update =====
+function updateCat(dt) {
+  const c = cat;
+  c.dashCd -= dt; c.hopBuf -= dt; c.sitBuf -= dt; c.sitT -= dt;
+  c.sx += (1 - c.sx) * Math.min(1, dt * 12); c.sy += (1 - c.sy) * Math.min(1, dt * 12);
+  if (c.fall > 0) { c.fall += dt; if (c.fall > 0.9 && mode === 'play') { instant({ pass: false, verdict: 'Cat fell through the internet. Very robot behavior.' }); } return; }
+  const frozen = mode === 'verifying' || mode === 'result';
+  if (pressed.hop) c.hopBuf = 0.14; if (pressed.sit) c.sitBuf = 0.2;
+  let ix = (key.right ? 1 : 0) - (key.left ? 1 : 0), iy = (key.down ? 1 : 0) - (key.up ? 1 : 0);
+  if (ix || iy || pressed.hop || pressed.dash) lastInputT = time;
+  if (c.auto > 0) { c.auto -= dt; ix = c.autoD.x; iy = c.autoD.y; }
+  if (frozen) { ix = iy = 0; c.hopBuf = 0; }
+  const len = Math.hypot(ix, iy); if (len) { ix /= len; iy /= len; c.dir = { x: ix, y: iy }; if (Math.abs(ix) > 0.1) c.face = Math.sign(ix); }
+  const grounded = c.hopT <= 0;
+  const sitting = grounded && c.dashT <= 0 && (key.sit || c.sitT > 0 || frozen);
+  if (c.hopBuf > 0 && grounded && !frozen) { c.hopT = HOPD; c.hopBuf = 0; SFX.hop(); c.sx = 0.8; c.sy = 1.25; }
+  if (c.hopT > 0) { c.hopT -= dt; c.z = Math.sin(Math.PI * (1 - Math.max(0, c.hopT) / HOPD)) * 26; if (c.hopT <= 0) { c.z = 0; c.sx = 1.3; c.sy = 0.75; SFX.land(); addP(c.x, c.y, 6, '#c9d2e3', 70, 0.35, 3); } }
+  if (pressed.dash && c.dashCd <= 0 && !frozen) { const d = len ? { x: ix, y: iy } : { x: c.face, y: 0 }; c.dashT = 0.16; c.dashCd = 0.42; c.vx = d.x * 640; c.vy = d.y * 640; SFX.dash(); c.sx = 1.4; c.sy = 0.7; kick(2); }
+  if (c.dashT > 0) { c.dashT -= dt; if (Math.random() < 0.7) parts.push({ x: c.x - c.vx * 0.03, y: c.y - 8 - c.z, vx: 0, vy: 0, life: 0.25, max: 0.25, col: '#ffffffaa', sz: 6 }); }
+  else { const sp = sitting ? 0 : 215; c.vx += (ix * sp - c.vx) * Math.min(1, dt * 16); c.vy += (iy * sp - c.vy) * Math.min(1, dt * 16); }
+  c.x += c.vx * dt; c.y += c.vy * dt;
+  if (R && R.conveyor && grounded && mode === 'play') { const t = tileAt(c.x, c.y); if (t >= 0) c.x += 30 * ((Math.floor(t / n) % 2) ? -1 : 1) * dt; }
+  c.x = clamp(c.x, PANEL.x + 14, PANEL.x + PANEL.w - 14); c.y = clamp(c.y, PANEL.y + 36, PANEL.y + PANEL.h - 4);
+  if (Math.hypot(c.vx, c.vy) > 20 && grounded) { c.walkT += dt * 12; if (Math.floor(c.walkT / Math.PI) !== Math.floor((c.walkT - dt * 12) / Math.PI)) tone(220 + Math.random() * 40, 0.03, 'triangle', 0.015); }
+  if (c.sitBuf > 0 && grounded && c.dashT <= 0 && !frozen) { c.sitBuf = 0; c.sitT = 0.3; c.sx = 1.15; c.sy = 0.85; onSit(); }
+  // pads (only while grounded)
+  const p = grounded ? padAt() : c.pad;
+  if (p !== c.pad) { c.pad = p; enterPad(p); }
+  // falling tiles
+  if (R && R.falling && mode === 'play') {
+    const t = tileAt(c.x, c.y);
+    if (grounded) {
+      if (t !== c.lastTile && c.lastTile >= 0 && R.tiles[c.lastTile].state === 'ok') { R.tiles[c.lastTile].state = 'crumble'; R.tiles[c.lastTile].t = 0.45; }
+      c.lastTile = t;
+      const inGridY = c.y > GRID.y - 2 && c.y < GRID.y + GRID.h + 4;
+      const hole = (t >= 0 && R.tiles[t].state === 'gone') || (t < 0 && inGridY);
+      if (hole) { c.holeT += dt; if (c.holeT > 0.09) { c.fall = 0.001; SFX.fall(); kick(6); } } else c.holeT = 0;
+    }
+  }
+}
+function update(dt) {
+  time += dt;
+  shake = Math.max(0, shake - dt * 30);
+  if (toast.t > 0) toast.t -= dt;
+  if (bot.sayT > 0 && bot.sayT < 90) bot.sayT -= dt;
+  if (bot.moodT > 0) { bot.moodT -= dt; if (bot.moodT <= 0 && mode !== 'title') bot.mood = 'neutral'; }
+  bot.bounce = Math.max(0, bot.bounce - dt * 3);
+  updateCat(dt);
+  if (mode === 'play') updateRound(dt);
+  if (mode === 'verifying') {
+    V.t += dt; if (Math.floor(V.t * 8) !== Math.floor((V.t - dt) * 8)) SFX.tick();
+    if (V.res && V.t >= V.min) {
+      if (V.res.start) { SFX.meow(); startRun(); toastMsg('Suspicious paws detected. Additional verification required.', 3.5); }
+      else showResult(V.res);
+    }
+  }
+  if (mode === 'result') { RES.t += dt; if (RES.t > 3.4 || (RES.t > 1.1 && anyPressed)) endResult(); }
+  if (mode === 'denied' || mode === 'win') endT += dt;
+  if (R) R.tiles.forEach(t => {
+    t.sa += ((t.sel ? 0.82 : 1) - t.sa) * Math.min(1, dt * 14);
+    if (t.state === 'crumble') { t.t -= dt; if (t.t <= 0) { t.state = 'gone'; t.t = 0; SFX.crumble(); } }
+    else if (t.state === 'gone') t.t += dt;
+  });
+  for (let i = parts.length - 1; i >= 0; i--) { const p = parts[i]; p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; if (!p.text) p.vy += 300 * dt; if (p.life <= 0) parts.splice(i, 1); }
+  for (const k in pressed) pressed[k] = false; anyPressed = false;
+}
+function updateRound(dt) {
+  if (R.limit) { R.timeLeft -= dt; if (R.timeLeft <= 0) { R.timeLeft = 0; const msgs = { checkbox: 'Checkbox escaped. It is living its best life now.', still: 'Movement detected. Constantly. Suspiciously feline.' }; instant({ pass: false, verdict: msgs[R.kind] || 'Verification expired. Too slow. Suspiciously slow.' }); return; } }
+  if (R.conveyor) for (let r = 0; r < n; r++) rowOff[r] += 30 * (r % 2 ? -1 : 1) * dt;
+  if (R.kind === 'checkbox') {
+    const b = R.box, dx = b.x - cat.x, dy = b.y - (cat.y - 10), d = Math.hypot(dx, dy) || 1;
+    const tired = Math.min(0.55, (22 - R.timeLeft) / 30), sp = 240 * (1 - tired);
+    if (d < 175) { let ax = dx / d, ay = dy / d; const cx = 480 - b.x, cy = 286 - b.y; if (b.x < 330 || b.x > 630) ay += Math.sign(cy || 1) * 0.9 + Math.sign(dy || 1) * 0.3; if (b.y < 140 || b.y > 430) ax += Math.sign(cx || 1) * 0.9 + Math.sign(dx || 1) * 0.3; const l = Math.hypot(ax, ay) || 1; b.vx += (ax / l * sp - b.vx) * Math.min(1, dt * 6); b.vy += (ay / l * sp - b.vy) * Math.min(1, dt * 6); if (Math.random() < dt * 0.8) addTxt(b.x, b.y - 40, pick(['nope!', 'eek', 'no thx', 'bye']), C.red); }
+    else { b.vx *= 0.9; b.vy *= 0.9; }
+    b.x = clamp(b.x + b.vx * dt, 312, 648); b.y = clamp(b.y + b.vy * dt, 128, 448); b.wig += dt * (d < 175 ? 20 : 3);
+  }
+  if (R.kind === 'still') {
+    const moving = Math.hypot(cat.vx, cat.vy) > 8 || cat.hopT > 0 || cat.dashT > 0;
+    if (!key.sit && cat.auto <= 0 && time - lastInputT > 1.2 && Math.random() < dt * 1.5) { const a = rnd(0, 6.28); cat.auto = rnd(0.35, 0.7); cat.autoD = { x: Math.cos(a), y: Math.sin(a) }; addTxt(cat.x, cat.y - 56, pick(['zoomies!', '(cats can\'t)', 'a bug!', '!!!', 'brb']), C.red); }
+    if (moving) { if (R.still > 0.6) addTxt(cat.x, cat.y - 60, 'movement detected', C.red); R.still = 0; } else R.still += dt;
+    R.fly.a += dt;
+    if (R.timeLeft < 20 && !R.hinted) { R.hinted = true; toastMsg('Hint: cats are liquid. HOLD sit to loaf.', 5); }
+    if (R.still >= 5) instant({ pass: true, verdict: pick(['Five seconds of stillness. Disturbingly loaf-like. Accepted.', 'Stillness verified. That was a loaf, but fine.']) });
+  }
+  if (R.kind === 'boss') {
+    const f = R.friend; f.moveT -= dt;
+    if (f.moveT <= 0) {
+      f.moveT = rnd(3, 4.5); const r = Math.floor(f.tile / n), c = f.tile % n;
+      const nb = [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]].filter(q => q[0] >= 0 && q[0] < n && q[1] >= 0 && q[1] < n).map(q => q[0] * n + q[1]);
+      const bots = nb.filter(i => R.tiles[i].icon === 'robot'); f.tile = (bots.length && Math.random() < 0.6) ? pick(bots) : pick(nb); f.hop = 1; SFX.beep();
+      if (R.tiles[f.tile].sel) say('Uh. I am standing on a checked square. Is that bad?', 'nervous', 3);
+    }
+    const tx = GRID.x + (f.tile % n) * pitch + ts / 2, ty = GRID.y + Math.floor(f.tile / n) * pitch + ts * 0.8;
+    if (!f.x) { f.x = tx; f.y = ty; } f.x += (tx - f.x) * Math.min(1, dt * 6); f.y += (ty - f.y) * Math.min(1, dt * 6); f.hop = Math.max(0, f.hop - dt * 2.5);
+  }
+}
+
+// ===== Rendering =====
+function txt(s, x, y, size, col, align = 'left', weight = 600, font = FONT) { ctx.font = `${weight} ${size}px ${font}`; ctx.fillStyle = col; ctx.textAlign = align; ctx.textBaseline = 'middle'; ctx.fillText(s, x, y); }
+function wrap(s, maxW, size, weight = 500, font = FONT) {
+  ctx.font = `${weight} ${size}px ${font}`; const words = String(s).split(' '), out = []; let line = '';
+  for (const w of words) { const t = line ? line + ' ' + w : w; if (ctx.measureText(t).width > maxW && line) { out.push(line); line = w; } else line = t; }
+  if (line) out.push(line); return out;
+}
+function fitSize(s, maxW, size, weight = 700) { ctx.font = `${weight} ${size}px ${FONT}`; while (size > 12 && ctx.measureText(s).width > maxW) { size -= 1; ctx.font = `${weight} ${size}px ${FONT}`; } return size; }
+function drawBackground() {
+  ctx.fillStyle = C.navy; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#ffffff10'; for (let x = 12; x < W; x += 24) for (let y = 12; y < H; y += 24) ctx.fillRect(x, y, 2, 2);
+  ctx.strokeStyle = '#5ff3ff18'; ctx.lineWidth = 2;
+  for (let i = 0; i < 6; i++) { const y = 40 + i * 90, o = (time * 40 + i * 70) % 260; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y + 20); ctx.stroke(); ctx.fillStyle = '#5ff3ff55'; ctx.fillRect(700 + o, y + 20 * (700 + o) / W - 2, 6, 4); }
+}
+function drawBot(x, y, s, mood) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+  const b = Math.sin(time * 3) * 2 - bot.bounce * 8 * Math.abs(Math.sin(time * 12));
+  ell(ctx, 0, 0, 44, 9, 'rgba(0,0,0,.3)', 0);
+  rr(ctx, -40, -22, 80, 22, 8, '#3b4660'); for (let i = 0; i < 5; i++) circ(ctx, -30 + i * 15, -11, 5, '#6b7896', 2);
+  ctx.translate(0, b);
+  rr(ctx, -30, -82, 60, 60, 10, C.bot); rr(ctx, -16, -66, 32, 26, 5, C.botD); circ(ctx, 0, -53, 6, (Math.sin(time * 4) > 0) ? '#ffd23f' : '#ff8c42', 2);
+  const arm = mood === 'ecstatic' || mood === 'happy' ? -1 : 1;
+  ln(ctx, [[-30, -70], [-46, -70 + 26 * arm]], 7, O); ln(ctx, [[-30, -70], [-46, -70 + 26 * arm]], 4, C.bot);
+  ln(ctx, [[30, -70], [46, -70 + 26 * arm]], 7, O); ln(ctx, [[30, -70], [46, -70 + 26 * arm]], 4, C.bot);
+  ln(ctx, [[0, -140], [0, -156]], 3); circ(ctx, 0, -159, 6, (time % 1 < 0.5) ? '#ff4d6d' : '#ffb3c1', 2);
+  rr(ctx, -42, -142, 84, 60, 12, C.bot); rr(ctx, -34, -134, 68, 44, 7, C.screen, 2);
+  ctx.strokeStyle = C.cyan; ctx.fillStyle = C.cyan; ctx.lineWidth = 3; ctx.lineCap = 'round';
+  const ey = -114, blink = (time % 4) < 0.12;
+  if (blink) { ln(ctx, [[-18, ey], [-8, ey]], 3, C.cyan); ln(ctx, [[8, ey], [18, ey]], 3, C.cyan); }
+  else if (mood === 'happy' || mood === 'ecstatic') { ctx.beginPath(); ctx.arc(-13, ey + 3, 7, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke(); ctx.beginPath(); ctx.arc(13, ey + 3, 7, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke(); ctx.beginPath(); ctx.arc(0, ey + 8, 8, 0.2, Math.PI - 0.2); ctx.stroke(); }
+  else if (mood === 'sad' || mood === 'crying') { ln(ctx, [[-20, ey - 3], [-8, ey - 8]], 3, C.cyan); ln(ctx, [[20, ey - 3], [8, ey - 8]], 3, C.cyan); circ(ctx, -13, ey + 3, 4, C.cyan, 0); circ(ctx, 13, ey + 3, 4, C.cyan, 0); ctx.beginPath(); ctx.arc(0, ey + 20, 8, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke(); if (mood === 'crying' || time % 3 < 1.5) { const ty = ((time * 40) % 30); circ(ctx, -16, ey + 10 + ty, 3, '#7fd1ff', 0); } }
+  else if (mood === 'nervous') { circ(ctx, -13, ey, 5, C.cyan, 0); circ(ctx, 13, ey, 5, C.cyan, 0); ln(ctx, [[-10, ey + 14], [-5, ey + 10], [0, ey + 14], [5, ey + 10], [10, ey + 14]], 2.5, C.cyan); circ(ctx, 34, ey - 18, 3, '#7fd1ff', 0); }
+  else { circ(ctx, -13, ey, 5, C.cyan, 0); circ(ctx, 13, ey, 5, C.cyan, 0); ln(ctx, [[-6, ey + 13], [6, ey + 13]], 3, C.cyan); }
+  ctx.restore();
+}
+function drawLeft() {
+  const inBoss = R && R.kind === 'boss' && (mode === 'play' || mode === 'verifying' || mode === 'result');
+  if (!inBoss) drawBot(bot.x, bot.y, 1, bot.mood);
+  else { txt('(he\'s on the grid,', 135, 420, 16, '#9fb0d6', 'center', 500); txt('pretending)', 135, 440, 16, '#9fb0d6', 'center', 500); }
+  if (mode === 'title' || mode === 'denied') { ctx.save(); ctx.translate(135, 272); ctx.rotate(-0.06); rr(ctx, -78, -18, 156, 36, 4, '#fff7d6'); txt('PLS LET ME IN', 0, 1, 16, C.ink, 'center', 700); ctx.restore(); }
+  if (bot.say && bot.sayT > 0) {
+    const lines = wrap(bot.say, 210, 17, 500), bh = lines.length * 22 + 20, by = 210 - bh;
+    rr(ctx, 20, by, 230, bh, 14, '#ffffff'); poly(ctx, [[110, by + bh - 2], [130, by + bh - 2], [122, by + bh + 16]], '#ffffff', 0);
+    lines.forEach((l, i) => txt(l, 34, by + 20 + i * 22, 17, C.ink, 'left', 500));
+  }
+  txt('your robot friend', 135, 520, 15, '#7d8bb3', 'center', 500);
+}
+function drawHUD() {
+  const x = 712, w = 232;
+  rr(ctx, x, 14, w, 250, 16, C.navy2, 0);
+  txt('HUMANCHECK™ session', x + 16, 36, 15, '#9fb0d6', 'left', 500);
+  const rd = mode === 'title' ? '—' : `${Math.min(roundIdx + 1, 10)}/10`;
+  txt('ROUND', x + 16, 68, 16, '#9fb0d6', 'left', 600); txt(rd, x + w - 16, 68, 30, '#fff', 'right', 700);
+  txt('VERIFIED', x + 16, 108, 16, '#9fb0d6', 'left', 600); txt(String(verified), x + w - 16, 108, 30, C.green, 'right', 700);
+  txt('STRIKES', x + 16, 148, 16, '#9fb0d6', 'left', 600);
+  for (let i = 0; i < 3; i++) { const bx = x + w - 108 + i * 34; rr(ctx, bx, 134, 28, 28, 6, i < strikes ? C.red : '#2c3963', 0); if (i < strikes) { ln(ctx, [[bx + 8, 142], [bx + 20, 154]], 3, '#fff'); ln(ctx, [[bx + 20, 142], [bx + 8, 154]], 3, '#fff'); } }
+  txt('BEST', x + 16, 188, 16, '#9fb0d6', 'left', 600); txt(`${best}/10`, x + w - 16, 188, 22, '#fff', 'right', 700);
+  const live = aiLive(); rr(ctx, x + 16, 214, 120, 30, 15, live ? '#1d6b4a' : '#33406a', 0);
+  circ(ctx, x + 32, 229, 5, live ? '#5dffb0' : '#8a96bd', 0); txt(live ? 'AI: live' : 'AI: scripted', x + 44, 230, 16, '#fff', 'left', 600);
+  if (live && aiBusy) txt('…', x + 150, 228, 22, '#5dffb0', 'left', 700);
+  const ctl = [['WASD / ↑↓←→', 'walk'], ['SPACE', 'hop'], ['SHIFT', 'dash'], ['C / X / CTRL', 'sit = select'], ['VERIFY pad', 'walk onto it']];
+  rr(ctx, x, 280, w, 196, 16, '#151e3c', 0); txt('CONTROLS', x + 16, 302, 15, '#9fb0d6', 'left', 600);
+  ctl.forEach((c, i) => { txt(c[0], x + 16, 332 + i * 30, 16, C.gold, 'left', 600, FONT); txt(c[1], x + w - 16, 332 + i * 30, 16, '#dbe3ff', 'right', 500); });
+  txt('Movement is the only input.', x + w / 2, 500, 14, '#7d8bb3', 'center', 500);
+}
+function drawPanelBase() {
+  rr(ctx, PANEL.x + 6, PANEL.y + 8, PANEL.w, PANEL.h, 10, 'rgba(0,0,0,.35)', 0);
+  rr(ctx, PANEL.x, PANEL.y, PANEL.w, PANEL.h, 10, C.panel, 0);
+  let hc = C.blue; if (mode === 'denied') hc = C.red; if (mode === 'win') hc = C.green;
+  ctx.save(); ctx.beginPath(); ctx.roundRect(HEAD.x + 8, HEAD.y + 8, HEAD.w - 16, HEAD.h - 8, 6); ctx.fillStyle = hc; ctx.fill(); ctx.restore();
+  ctx.fillStyle = C.line; ctx.fillRect(PANEL.x + 10, 472, PANEL.w - 20, 2);
+}
+function drawHeader() {
+  const hx = HEAD.x + 22;
+  if (mode === 'title') { txt('HUMANCHECK™', hx, 40, 30, '#fff', 'left', 700); txt('Verify you are human to continue to THE INTERNET.', hx, 72, 15, '#dbe7ff', 'left', 500); return; }
+  if (mode === 'denied') { txt('ACCESS DENIED', hx, 40, 30, '#fff', 'left', 700); txt('Reason: suspected robot. And cat.', hx, 72, 16, '#ffe0e0', 'left', 500); return; }
+  if (mode === 'win') { txt('ACCESS GRANTED', hx, 40, 30, '#fff', 'left', 700); txt('Welcome, definitely-human visitor(s).', hx, 72, 16, '#e0ffe9', 'left', 500); return; }
+  if (!R) return;
+  const maxW = R.dog ? 300 : 370;
+  txt(R.l1, hx, 32, fitSize(R.l1, maxW, 15, 500), '#dbe7ff', 'left', 500);
+  const bs = fitSize(R.big, maxW, 28); txt(R.big, hx, 56, bs, '#fff', 'left', 700);
+  txt(R.l3 || '', hx, 80, fitSize(R.l3 || '', maxW, 13, 500), '#c3d6ff', 'left', 500);
+  if (R.dog) { drawIcon(ctx, 'dog', 652, 70, 38); rr(ctx, 620, 22, 46, 26, 12, '#fff', 2); txt('?', 643, 35, 18, C.ink, 'center', 700); circ(ctx, 640, 54, 3, '#fff', 1.5); }
+  if (R.limit && mode === 'play') {
+    const f = R.timeLeft / R.limit; ctx.fillStyle = '#ffffff33'; ctx.fillRect(HEAD.x + 8, HEAD.y + HEAD.h - 4, HEAD.w - 16, 4);
+    ctx.fillStyle = f < 0.3 ? '#ff8a8a' : '#fff'; ctx.fillRect(HEAD.x + 8, HEAD.y + HEAD.h - 4, (HEAD.w - 16) * f, 4);
+    if (R.kind !== 'still') txt(Math.ceil(R.timeLeft) + 's', HEAD.x + HEAD.w - 22, 32, 18, f < 0.3 ? '#ffd0d0' : '#fff', 'right', 700);
+  }
+  if (R.src === 'ai') { rr(ctx, HEAD.x + HEAD.w - 64, 72, 46, 16, 8, '#ffffff33', 0); txt('AI ✦', HEAD.x + HEAD.w - 41, 80, 11, '#fff', 'center', 700); }
+}
+function drawTiles() {
+  if (!R || !n) return;
+  ctx.save(); ctx.beginPath(); ctx.rect(GRID.x - 2, GRID.y - 2, GRID.w + 4, GRID.h + 4); ctx.clip();
+  const L = n * pitch;
+  R.tiles.forEach((t, i) => {
+    const r = Math.floor(i / n), c = i % n;
+    let x = GRID.x + ((((c * pitch + rowOff[r]) % L) + L) % L); const y = GRID.y + r * pitch;
+    drawTile(t, i, x, y, r, c); if (x + ts > GRID.x + GRID.w) drawTile(t, i, x - L, y, r, c);
+  });
+  ctx.restore();
+}
+function drawTile(t, i, x, y, r, c) {
+  if (t.state === 'gone' && t.t > 0.6) { ctx.fillStyle = '#0b1024'; ctx.fillRect(x, y, ts, ts); ctx.strokeStyle = '#ffffff22'; ctx.setLineDash([4, 4]); ctx.strokeRect(x + 4, y + 4, ts - 8, ts - 8); ctx.setLineDash([]); return; }
+  ctx.save(); ctx.translate(x + ts / 2, y + ts / 2);
+  if (t.state === 'gone') { ctx.fillStyle = '#0b1024'; ctx.fillRect(-ts / 2, -ts / 2, ts, ts); const k = 1 - t.t / 0.6; ctx.rotate((1 - k) * 0.8); ctx.scale(k, k); ctx.globalAlpha = k; }
+  if (t.state === 'crumble') ctx.translate(rnd(-3, 3), rnd(-3, 3));
+  ctx.scale(t.sa, t.sa);
+  if (R.scene) ctx.drawImage(R.scene, c * pitch, r * pitch, ts, ts, -ts / 2, -ts / 2, ts, ts);
+  else ctx.drawImage(iconTile(t.icon, Math.round(ts)), -ts / 2, -ts / 2, ts, ts);
+  if (t.state === 'crumble') { ctx.strokeStyle = C.ink; ctx.lineWidth = 2; ln(ctx, [[-ts / 3, -ts / 2], [-5, 0], [ts / 4, ts / 2]], 2); }
+  ctx.restore();
+  if (t.sel && t.state !== 'gone') { circ(ctx, x + 14, y + 14, 12, C.blue, 0); ln(ctx, [[x + 8, y + 14], [x + 12, y + 19], [x + 20, y + 9]], 3, '#fff'); }
+}
+function drawFooter() {
+  const fy = 501;
+  if (mode === 'play' || mode === 'verifying' || mode === 'result') {
+    const icons = { reload: '⟳', audio: '♪', info: 'i' };
+    for (const k in FOOTPADS) { const p = FOOTPADS[k]; circ(ctx, p.x, p.y, 14, cat.pad === k ? '#dfe8ff' : '#eef1f6', 2); txt(icons[k], p.x, p.y + 1, 16, C.grey, 'center', 700); }
+    const disabled = R && (R.kind === 'checkbox' || R.kind === 'still'), on = cat.pad === 'verify';
+    rr(ctx, VERIFY.x, VERIFY.y + (on ? 3 : 0), VERIFY.w, VERIFY.h, 6, disabled ? '#b6c2d9' : on ? C.blueD : C.blue, 0);
+    if (!on) { ctx.fillStyle = disabled ? '#98a5bf' : C.blueD; ctx.fillRect(VERIFY.x + 6, VERIFY.y + VERIFY.h, VERIFY.w - 12, 3); }
+    txt('VERIFY', VERIFY.x + VERIFY.w / 2, VERIFY.y + VERIFY.h / 2 + (on ? 3 : 0), 18, '#fff', 'center', 700);
+    drawLogo(408, fy, 0.75);
+  } else { drawLogo(300, fy, 1); txt('Privacy · Terms · Meow', 660, fy, 13, C.grey, 'right', 500); }
+}
+function drawLogo(x, y, s) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+  ctx.beginPath(); ctx.moveTo(0, -14); ctx.lineTo(13, -9); ctx.lineTo(11, 6); ctx.quadraticCurveTo(6, 13, 0, 16); ctx.quadraticCurveTo(-6, 13, -11, 6); ctx.lineTo(-13, -9); ctx.closePath(); sh(ctx, '#3a7bf0', 2);
+  ell(ctx, 0, 0, 7, 5, '#fff', 0); circ(ctx, 0, 0, 3, C.ink, 0);
+  txt('HUMANCHECK™', 20, 1, 15, C.grey, 'left', 700); ctx.restore();
+}
+function drawCheckbox(x, y, size, checked, label, labelSize) {
+  rr(ctx, x, y, size, size, 6, '#fff', 3);
+  if (checked) ln(ctx, [[x + size * 0.18, y + size * 0.52], [x + size * 0.42, y + size * 0.76], [x + size * 0.84, y + size * 0.22]], size * 0.13, C.green);
+  if (label) txt(label, x + size + 16, y + size / 2, labelSize, C.ink, 'left', 600);
+}
+function drawTitleFloor() {
+  const s = TPADS.start, on = cat.pad === 'start';
+  rr(ctx, s.x, s.y, s.w, s.h, 8, on ? '#eef4ff' : '#f2f4f8', 0); ctx.strokeStyle = on ? C.blue : C.line; ctx.lineWidth = 3; ctx.strokeRect(s.x + 1.5, s.y + 1.5, s.w - 3, s.h - 3);
+  const checking = mode === 'verifying' && V && V.res && V.res.start;
+  if (checking) { ctx.save(); ctx.translate(s.x + 54, s.y + 54); ctx.rotate(time * 8); ctx.beginPath(); ctx.arc(0, 0, 22, 0, 4.5); ctx.lineWidth = 6; ctx.strokeStyle = C.blue; ctx.stroke(); ctx.restore(); txt("I'm not a robot", s.x + 98, s.y + 54, 30, C.ink, 'left', 600); }
+  else drawCheckbox(s.x + 28, s.y + 28, 52, false, "I'm not a robot", 30);
+  drawLogo(s.x + s.w - 126, s.y + s.h - 18, 0.7);
+  txt('SIT here to start', s.x + 98, s.y + 86, 14, C.grey, 'left', 500);
+  const a = TPADS.ai, ao = cat.pad === 'ai';
+  rr(ctx, a.x, a.y, a.w, a.h, 8, aiOn ? '#dff7ea' : '#f2f4f8', 0); ctx.strokeStyle = ao ? C.blue : C.line; ctx.strokeRect(a.x + 1.5, a.y + 1.5, a.w - 3, a.h - 3);
+  txt(aiOn ? 'AI ON ✦' : 'AI OFF', a.x + a.w / 2, a.y + 36, 26, aiOn ? '#178a56' : C.ink, 'center', 700);
+  txt('step to toggle', a.x + a.w / 2, a.y + 68, 14, C.grey, 'center', 500);
+  const h = TPADS.howto, ho = cat.pad === 'howto';
+  rr(ctx, h.x, h.y, h.w, h.h, 8, howto ? '#e8efff' : '#f2f4f8', 0); ctx.strokeStyle = ho ? C.blue : C.line; ctx.strokeRect(h.x + 1.5, h.y + 1.5, h.w - 3, h.h - 3);
+  txt('HOW TO', h.x + h.w / 2, h.y + 36, 26, C.ink, 'center', 700); txt('step to read', h.x + h.w / 2, h.y + 68, 14, C.grey, 'center', 500);
+  const lines = howto ? ['You are the cat. The squares are the floor.', 'SIT on a square to select it (sit again to unselect).', 'Walk onto VERIFY to submit. HOP gaps, DASH to slide.', '10 checks. 3 strikes = ACCESS DENIED.']
+    : aiMsg ? wrap(aiMsg, 350, 15, 500) : ['Help your robot friend sneak onto the internet.', 'Walk with arrows / WASD. Sit with C or X.'];
+  lines.slice(0, 4).forEach((l, i) => txt(l, 480, 382 + i * 22, 15, C.ink, 'center', 500));
+}
+function drawEndFloor() {
+  const win = mode === 'win';
+  txt(win ? 'Your robot friend is online.' : 'Your robot friend has been flagged.', 480, 140, 20, C.ink, 'center', 600);
+  txt(`Verified ${verified}/10 · strikes ${strikes}/3 · best ${best}/10`, 480, 170, 16, C.grey, 'center', 500);
+  if (win) {
+    rr(ctx, 360, 192, 240, 130, 8, '#fff', 3); ctx.fillStyle = '#e6ecf5'; ctx.fillRect(362, 194, 236, 20); circ(ctx, 374, 204, 4, C.red, 0); circ(ctx, 388, 204, 4, C.gold, 0); circ(ctx, 402, 204, 4, C.green, 0);
+    for (let i = 0; i < 3; i++) ctx.drawImage(iconTile('cat', 64), 372 + i * 74, 226, 64, 64);
+    txt('cat_videos.html', 480, 308, 13, C.grey, 'center', 500);
+  } else {
+    for (let i = 0; i < 3; i++) { const x = 360 + i * 85; rr(ctx, x, 200, 70, 70, 6, '#fbe5e5', 0); ln(ctx, [[x + 20, 220], [x + 50, 250]], 6, C.red); ln(ctx, [[x + 50, 220], [x + 20, 250]], 6, C.red); }
+    txt('"suspected robot"', 480, 300, 18, C.red, 'center', 600);
+  }
+  const r = TPADS.retry, on = cat.pad === 'retry';
+  rr(ctx, r.x, r.y, r.w, r.h, 8, on ? '#eef4ff' : '#f2f4f8', 0); ctx.strokeStyle = on ? C.blue : C.line; ctx.lineWidth = 3; ctx.strokeRect(r.x + 1.5, r.y + 1.5, r.w - 3, r.h - 3);
+  drawCheckbox(r.x + 24, r.y + 22, 46, false, win ? 'Verify again (why?)' : "I'm STILL not a robot", 24);
+  txt('SIT here to try again', 480, 452, 14, C.grey, 'center', 500);
+}
+function drawCat() {
+  const c = cat; let sc = 1, alpha = 1;
+  if (c.fall > 0) { sc = Math.max(0, 1 - c.fall / 0.8); alpha = sc; }
+  ctx.save(); ctx.globalAlpha = alpha;
+  ell(ctx, c.x, c.y, 18 * (1 - c.z / 60) * sc, 6 * (1 - c.z / 60) * sc, 'rgba(0,0,0,.22)', 0);
+  ctx.translate(c.x, c.y - c.z); if (c.fall > 0) ctx.rotate(c.fall * 8);
+  ctx.scale(c.face * c.sx * sc, c.sy * sc);
+  const sitting = c.hopT <= 0 && c.dashT <= 0 && (key.sit || c.sitT > 0 || mode === 'verifying' || mode === 'result') && c.fall <= 0;
+  const loaf = sitting && R && R.kind === 'still' && key.sit;
+  const moving = Math.hypot(c.vx, c.vy) > 20, lg = moving ? Math.sin(c.walkT) * 4 : 0;
+  const tailW = Math.sin(time * 4) * 0.4;
+  if (loaf) {
+    ell(ctx, 0, -10, 20, 11, C.cat); ln(ctx, [[-6, -19], [-6, -13]], 3, C.catD); ln(ctx, [[2, -20], [2, -14]], 3, C.catD);
+    drawCatHead(12, -18, true);
+  } else if (sitting) {
+    ctx.beginPath(); ctx.moveTo(-8, -2); ctx.quadraticCurveTo(-24, 0, -20 + tailW * 6, -14); sh(ctx, null, 7); ctx.beginPath(); ctx.moveTo(-8, -2); ctx.quadraticCurveTo(-24, 0, -20 + tailW * 6, -14); ctx.lineWidth = 4; ctx.strokeStyle = C.cat; ctx.stroke();
+    ell(ctx, 0, -14, 13, 15, C.cat); ell(ctx, 3, -11, 7, 10, C.catL, 0); ln(ctx, [[-9, -20], [-4, -18]], 2.5, C.catD); ln(ctx, [[-10, -13], [-4, -12]], 2.5, C.catD);
+    rr(ctx, -2, -4, 6, 5, 2, C.cat, 2); rr(ctx, 5, -4, 6, 5, 2, C.cat, 2);
+    drawCatHead(3, -33, false);
+  } else {
+    ctx.beginPath(); ctx.moveTo(-15, -16); ctx.quadraticCurveTo(-30, -20, -28 + tailW * 8, -36); ctx.lineWidth = 7; ctx.strokeStyle = O; ctx.lineCap = 'round'; ctx.stroke(); ctx.lineWidth = 4; ctx.strokeStyle = C.cat; ctx.stroke();
+    [[-10, lg], [-4, -lg], [7, -lg], [13, lg]].forEach(l => rr(ctx, l[0] - 3, -10, 6, 10 + l[1] * 0.5, 3, C.catD, 2));
+    ell(ctx, 0, -16, 18, 10, C.cat); ln(ctx, [[-8, -24], [-6, -18]], 2.5, C.catD); ln(ctx, [[-1, -25], [0, -19]], 2.5, C.catD);
+    drawCatHead(15, -26, false);
+  }
+  ctx.restore();
+}
+function drawCatHead(x, y, sleepy) {
+  poly(ctx, [[x - 10, y - 5], [x - 8, y - 18], [x - 1, y - 9]], C.cat, 2.5); poly(ctx, [[x + 10, y - 5], [x + 8, y - 18], [x + 1, y - 9]], C.cat, 2.5);
+  circ(ctx, x, y, 11, C.cat, 2.5); ln(ctx, [[x - 3, y - 10], [x - 2, y - 6]], 2, C.catD); ln(ctx, [[x + 3, y - 10], [x + 2, y - 6]], 2, C.catD);
+  if (sleepy || (time % 3.5) < 0.12) { ln(ctx, [[x - 6, y], [x - 2, y]], 2); ln(ctx, [[x + 3, y], [x + 7, y]], 2); }
+  else { let lx = 0; if (R && R.kind === 'still' && mode === 'play') lx = Math.cos(R.fly.a * 3) * 1.5; circ(ctx, x - 4 + lx, y - 1, 2.6, O, 0); circ(ctx, x + 5 + lx, y - 1, 2.6, O, 0); }
+  poly(ctx, [[x, y + 3], [x + 3, y + 3], [x + 1.5, y + 5]], '#ff8fa3', 0);
+  ln(ctx, [[x + 9, y + 3], [x + 17, y + 1]], 1.2, '#00000066'); ln(ctx, [[x + 9, y + 5], [x + 17, y + 6]], 1.2, '#00000066');
+}
+function drawSpecial() {
+  if (!R) return;
+  if (R.kind === 'checkbox') {
+    const b = R.box, wob = Math.sin(b.wig) * 4;
+    ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(Math.sin(b.wig * 0.7) * 0.08);
+    rr(ctx, -30, -30 + wob * 0.3, 60, 60, 8, '#fff', 4); if (b.checked) ln(ctx, [[-18, 0], [-4, 14], [20, -16]], 8, C.green);
+    ln(ctx, [[-14, 30], [-20 - wob, 44]], 4); ln(ctx, [[14, 30], [20 + wob, 44]], 4);
+    circ(ctx, -10, -6, 5, '#fff', 2); circ(ctx, 10, -6, 5, '#fff', 2); circ(ctx, -9, -5, 2.4, O, 0); circ(ctx, 11, -5, 2.4, O, 0);
+    ctx.restore(); txt("I'm not a robot", b.x, b.y + 58, 15, C.grey, 'center', 600);
+  }
+  if (R.kind === 'still') {
+    const f = Math.min(1, R.still / 5);
+    rr(ctx, 330, 300, 300, 26, 13, '#e3e8f1', 0); rr(ctx, 330, 300, 300 * f, 26, 13, f >= 1 ? C.green : C.blue, 0);
+    txt(`stillness ${R.still.toFixed(1)} / 5.0 s`, 480, 314, 15, f > 0.5 ? '#fff' : C.ink, 'center', 600);
+    txt(`${Math.ceil(R.timeLeft)}s left to be human`, 480, 344, 14, C.grey, 'center', 500);
+    const fx = cat.x + Math.cos(R.fly.a * 3) * 40, fy = cat.y - 50 + Math.sin(R.fly.a * 5) * 16;
+    circ(ctx, fx, fy, 3, O, 0); ell(ctx, fx - 3, fy - 4, 4, 2, '#ffffffcc', 0); ell(ctx, fx + 3, fy - 4, 4, 2, '#ffffffcc', 0);
+    txt('(do not look at the fly)', 480, 140, 15, C.grey, 'center', 500);
+  }
+  if (R.kind === 'boss' && R.friend.x) {
+    const f = R.friend; const sel = R.tiles[f.tile].sel;
+    ctx.save(); ctx.translate(0, -Math.sin(f.hop * Math.PI) * 16); drawBot(f.x, f.y, 0.42, sel ? 'nervous' : 'neutral'); ctx.restore();
+    if (sel) txt('!', f.x + 22, f.y - 76, 26, C.red, 'center', 700);
+  }
+}
+function drawOverlay() {
+  if (mode === 'verifying' && !(V.res && V.res.start)) {
+    ctx.fillStyle = 'rgba(247,249,252,.82)'; ctx.fillRect(GRID.x - 6, GRID.y - 4, GRID.w + 12, GRID.h + 8);
+    ctx.save(); ctx.translate(480, 260); ctx.rotate(time * 7); ctx.beginPath(); ctx.arc(0, 0, 30, 0, 4.6); ctx.lineWidth = 7; ctx.strokeStyle = C.blue; ctx.lineCap = 'round'; ctx.stroke(); ctx.restore();
+    txt('Verifying…', 480, 320, 24, C.ink, 'center', 700);
+    txt(V.ai ? 'consulting the HUMANCHECK oracle' : 'counting whiskers', 480, 348, 15, C.grey, 'center', 500);
+  }
+  if (mode === 'result') {
+    const k = Math.min(1, RES.t * 5), ok = RES.pass;
+    ctx.fillStyle = ok ? 'rgba(232,250,240,.93)' : 'rgba(253,236,236,.93)'; ctx.fillRect(GRID.x - 6, GRID.y - 4, GRID.w + 12, GRID.h + 8);
+    ctx.save(); ctx.translate(480, 210); ctx.scale(k, k); circ(ctx, 0, 0, 44, ok ? C.green : C.red, 0);
+    if (ok) ln(ctx, [[-20, 2], [-6, 16], [22, -14]], 9, '#fff'); else { ln(ctx, [[-16, -16], [16, 16]], 9, '#fff'); ln(ctx, [[16, -16], [-16, 16]], 9, '#fff'); }
+    ctx.restore();
+    txt(ok ? 'VERIFIED' : RES.banned ? 'FRIEND BANNED' : 'PLEASE TRY AGAIN', 480, 284, 28, ok ? '#178a56' : C.red, 'center', 700);
+    wrap(RES.verdict, 330, 18, 500).forEach((l, i) => txt(l, 480, 322 + i * 24, 18, C.ink, 'center', 500));
+    if (RES.src === 'ai') txt('— judged live by HUMANCHECK AI', 480, 400, 13, C.grey, 'center', 500);
+    if (!ok && strikes < 3) txt(`strike ${strikes} of 3`, 480, 430, 15, C.red, 'center', 600);
+  }
+  if (toast.t > 0 && toast.text) {
+    const a = Math.min(1, toast.t * 3); ctx.globalAlpha = a;
+    const lines = wrap(toast.text, 340, 15, 600); const h = lines.length * 20 + 14;
+    rr(ctx, 300, 432 - h, 360, h, 10, C.ink, 0); lines.forEach((l, i) => txt(l, 480, 432 - h + 17 + i * 20, 15, '#fff', 'center', 600));
+    ctx.globalAlpha = 1;
+  }
+}
+function drawParts() {
+  for (const p of parts) {
+    const a = Math.max(0, p.life / p.max); ctx.globalAlpha = a;
+    if (p.text) { ctx.font = `700 16px ${FONT}`; ctx.lineWidth = 4; ctx.strokeStyle = '#fff'; ctx.textAlign = 'center'; ctx.strokeText(p.text, p.x, p.y); txt(p.text, p.x, p.y, 16, p.col, 'center', 700); }
+    else { ctx.fillStyle = p.col; ctx.fillRect(p.x - p.sz / 2, p.y - p.sz / 2, p.sz, p.sz); }
+  }
+  ctx.globalAlpha = 1;
+}
+function render() {
+  ctx.save();
+  if (shake > 0) ctx.translate(rnd(-shake, shake) * 0.5, rnd(-shake, shake) * 0.5);
+  drawBackground(); drawLeft(); drawHUD();
+  drawPanelBase(); drawHeader();
+  if (mode === 'title' || (mode === 'verifying' && V && V.res && V.res.start)) drawTitleFloor();
+  else if (mode === 'denied' || mode === 'win') drawEndFloor();
+  else { drawTiles(); drawSpecial(); }
+  drawFooter();
+  drawCat(); drawParts(); drawOverlay();
+  ctx.restore();
+}
+
+// ===== Loop =====
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(1 / 30, (now - last) / 1000); last = now;
+  update(dt); render(); requestAnimationFrame(frame);
+}
+toTitle();
+requestAnimationFrame(frame);
+</script>

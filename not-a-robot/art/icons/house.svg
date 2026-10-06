@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 512 512">
+  <defs>
+    <rect id="chimney" x="320" y="112" width="44" height="90"/>
+    <rect id="wall" x="124" y="226" width="264" height="220"/>
+    <path id="roof" d="M256 78 L430 236 Q440 248 424 250 L88 250 Q72 248 82 236 Z"/>
+    <clipPath id="chimney-c"><use xlink:href="#chimney"/></clipPath>
+    <clipPath id="wall-c"><use xlink:href="#wall"/></clipPath>
+    <clipPath id="roof-c"><use xlink:href="#roof"/></clipPath>
+  </defs>
+  <g stroke-linejoin="round" stroke-linecap="round">
+    <!-- chimney -->
+    <use xlink:href="#chimney" fill="#1d2433" stroke="#1d2433" stroke-width="28"/>
+    <g clip-path="url(#chimney-c)">
+      <rect x="310" y="100" width="70" height="110" fill="#b0303f"/>
+      <rect x="310" y="100" width="44" height="110" fill="#d1495b"/>
+    </g>
+    <!-- wall -->
+    <use xlink:href="#wall" fill="#1d2433" stroke="#1d2433" stroke-width="28"/>
+    <g clip-path="url(#wall-c)">
+      <rect x="110" y="210" width="300" height="250" fill="#7fb3d5"/>
+      <rect x="356" y="210" width="40" height="250" fill="#5f93ba"/>
+      <rect x="110" y="240" width="300" height="34" fill="#5f93ba"/>
+      <!-- siding lines -->
+      <path d="M140 300 L196 300 M300 304 L340 304 M140 404 L184 404 M310 414 L344 414" fill="none" stroke="#6aa1c6" stroke-width="6"/>
+    </g>
+    <!-- windows -->
+    <g stroke="#1d2433" stroke-width="8.5">
+      <rect x="150" y="296" width="58" height="56" rx="6" fill="#fff2a8"/>
+      <rect x="304" y="296" width="58" height="56" rx="6" fill="#fff2a8"/>
+    </g>
+    <path d="M160 326 L160 306 L178 306" fill="none" stroke="#ffffff" stroke-width="6"/>
+    <path d="M314 326 L314 306 L332 306" fill="none" stroke="#ffffff" stroke-width="6"/>
+    <path d="M179 296 L179 352 M150 324 L208 324 M333 296 L333 352 M304 324 L362 324" fill="none" stroke="#1d2433" stroke-width="6"/>
+    <!-- door -->
+    <path d="M222 446 L222 360 Q222 328 256 328 Q290 328 290 360 L290 446 Z" fill="#5b3a29" stroke="#1d2433" stroke-width="8.5"/>
+    <path d="M276 360 Q276 344 262 340 L262 446 L276 446 Z" fill="#45291b"/>
+    <path d="M236 360 L236 420" fill="none" stroke="#7a5038" stroke-width="7"/>
+    <circle cx="274" cy="392" r="6" fill="#ffc93c"/>
+    <path d="M222 446 L290 446" fill="none" stroke="#1d2433" stroke-width="8.5"/>
+    <!-- roof -->
+    <use xlink:href="#roof" fill="#1d2433" stroke="#1d2433" stroke-width="28"/>
+    <g clip-path="url(#roof-c)">
+      <rect x="60" y="60" width="392" height="200" fill="#d1495b"/>
+      <path d="M256 70 L450 250 L290 250 Q300 170 256 70 Z" fill="#b0303f"/>
+      <rect x="60" y="232" width="392" height="30" fill="#b0303f"/>
+      <!-- highlight along left slope -->
+      <path d="M234 112 L132 206" fill="none" stroke="#e8808d" stroke-width="12"/>
+      <circle cx="110" cy="226" r="6" fill="#e8808d"/>
+      <!-- shingles -->
+      <path d="M200 170 L230 170 M164 206 L196 206 M250 206 L276 206 M232 136 L254 136" fill="none" stroke="#a82d3c" stroke-width="6"/>
+    </g>
+  </g>
+</svg>

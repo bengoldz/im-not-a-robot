@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 512 512">
+  <defs>
+    <path id="body" d="M118 336 Q116 264 200 262 L300 262 Q370 254 410 214 Q434 196 436 228 Q440 306 396 352 Q350 410 258 410 Q124 410 118 336 Z"/>
+    <circle id="head" cx="196" cy="190" r="70"/>
+    <path id="beak" d="M140 174 Q98 160 70 182 Q94 198 70 214 Q104 230 144 212 Z"/>
+    <path id="wing" d="M236 300 Q270 368 350 342 Q378 332 368 306 Q322 318 280 302 Q256 292 236 300 Z"/>
+    <clipPath id="body-c"><use xlink:href="#body"/></clipPath>
+    <clipPath id="body-lit"><use xlink:href="#body" transform="translate(-20 -22)"/></clipPath>
+    <clipPath id="head-c"><use xlink:href="#head"/></clipPath>
+    <clipPath id="head-lit"><use xlink:href="#head" transform="translate(-16 -16)"/></clipPath>
+    <clipPath id="beak-c"><use xlink:href="#beak"/></clipPath>
+    <clipPath id="wing-c"><use xlink:href="#wing"/></clipPath>
+  </defs>
+  <g stroke-linejoin="round" stroke-linecap="round" transform="translate(0 16)">
+    <!-- body -->
+    <use xlink:href="#body" fill="#1d2433" stroke="#1d2433" stroke-width="28"/>
+    <g clip-path="url(#body-c)">
+      <rect x="100" y="190" width="350" height="230" fill="#ebae17"/>
+      <rect x="100" y="190" width="350" height="230" fill="#ffd23f" clip-path="url(#body-lit)"/>
+      <path d="M150 306 Q170 286 206 284" fill="none" stroke="#ffe88f" stroke-width="12"/>
+      <path d="M398 236 L404 268" fill="none" stroke="#ffe88f" stroke-width="8"/>
+    </g>
+    <!-- wing -->
+    <g clip-path="url(#wing-c)">
+      <rect x="220" y="280" width="170" height="90" fill="#f5b800"/>
+      <path d="M260 352 Q320 360 380 320 L380 370 L250 370 Z" fill="#d99a00"/>
+    </g>
+    <use xlink:href="#wing" fill="none" stroke="#1d2433" stroke-width="8.5"/>
+    <path d="M290 322 Q316 330 344 322" fill="none" stroke="#c48a00" stroke-width="5"/>
+    <!-- beak -->
+    <use xlink:href="#beak" fill="#1d2433" stroke="#1d2433" stroke-width="28"/>
+    <g clip-path="url(#beak-c)">
+      <rect x="50" y="150" width="110" height="90" fill="#e2671f"/>
+      <path d="M60 150 L160 150 L160 194 Q120 190 84 196 Z" fill="#ff8c42"/>
+      <path d="M96 176 L116 174" fill="none" stroke="#ffb27a" stroke-width="7"/>
+    </g>
+    <path d="M84 198 Q112 202 138 194" fill="none" stroke="#1d2433" stroke-width="6"/>
+    <!-- head -->
+    <use xlink:href="#head" fill="#1d2433" stroke="#1d2433" stroke-width="28"/>
+    <g clip-path="url(#head-c)">
+      <rect x="110" y="100" width="180" height="180" fill="#ebae17"/>
+      <rect x="110" y="100" width="180" height="180" fill="#ffd23f" clip-path="url(#head-lit)"/>
+      <path d="M150 168 Q160 140 186 132" fill="none" stroke="#ffe88f" stroke-width="12"/>
+    </g>
+    <!-- tuft -->
+    <path d="M190 122 Q186 102 202 94 M204 122 Q210 106 226 104" fill="none" stroke="#1d2433" stroke-width="8.5"/>
+    <!-- eye and cheek -->
+    <ellipse cx="208" cy="176" rx="12" ry="16" fill="#1d2433"/>
+    <circle cx="204" cy="170" r="4.5" fill="#ffffff"/>
+    <ellipse cx="226" cy="214" rx="15" ry="9" fill="#ff8fa3" opacity="0.6"/>
+  </g>
+</svg>

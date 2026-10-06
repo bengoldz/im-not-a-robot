@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 512 512">
+  <defs>
+    <path id="ear-l" d="M156 162 Q98 164 80 242 Q66 316 98 352 Q128 380 152 340 Q176 290 184 206 Z"/>
+    <path id="ear-r" d="M356 162 Q414 164 432 242 Q446 316 414 352 Q384 380 360 340 Q336 290 328 206 Z"/>
+    <path id="head" d="M256 132 C340 132 384 186 384 256 C384 330 330 376 256 376 C182 376 128 330 128 256 C128 186 172 132 256 132 Z"/>
+    <ellipse id="muzzle" cx="256" cy="314" rx="70" ry="52"/>
+    <clipPath id="ear-l-c"><use xlink:href="#ear-l"/></clipPath>
+    <clipPath id="ear-r-c"><use xlink:href="#ear-r"/></clipPath>
+    <clipPath id="ear-l-lit"><use xlink:href="#ear-l" transform="translate(-14 -14)"/></clipPath>
+    <clipPath id="ear-r-lit"><use xlink:href="#ear-r" transform="translate(-14 -14)"/></clipPath>
+    <clipPath id="head-c"><use xlink:href="#head"/></clipPath>
+    <clipPath id="head-lit"><use xlink:href="#head" transform="translate(-22 -20)"/></clipPath>
+    <clipPath id="muzzle-c"><use xlink:href="#muzzle"/></clipPath>
+    <clipPath id="muzzle-lit"><use xlink:href="#muzzle" transform="translate(-12 -12)"/></clipPath>
+  </defs>
+  <g stroke-linejoin="round" stroke-linecap="round">
+    <!-- ears -->
+    <use xlink:href="#ear-l" fill="#1d2433" stroke="#1d2433" stroke-width="28"/>
+    <use xlink:href="#ear-r" fill="#1d2433" stroke="#1d2433" stroke-width="28"/>
+    <g clip-path="url(#ear-l-c)">
+      <rect x="40" y="130" width="180" height="260" fill="#6c4220"/>
+      <rect x="40" y="130" width="180" height="260" fill="#8a5a2b" clip-path="url(#ear-l-lit)"/>
+      <path d="M102 230 Q106 206 120 196" fill="none" stroke="#a87545" stroke-width="10"/>
+    </g>
+    <g clip-path="url(#ear-r-c)">
+      <rect x="292" y="130" width="180" height="260" fill="#6c4220"/>
+      <rect x="292" y="130" width="180" height="260" fill="#8a5a2b" clip-path="url(#ear-r-lit)"/>
+    </g>
+    <!-- head -->
+    <use xlink:href="#head" fill="#1d2433" stroke="#1d2433" stroke-width="28"/>
+    <g clip-path="url(#head-c)">
+      <rect x="100" y="110" width="310" height="290" fill="#a96f38"/>
+      <rect x="100" y="110" width="310" height="290" fill="#c98b4f" clip-path="url(#head-lit)"/>
+      <ellipse cx="184" cy="190" rx="26" ry="14" transform="rotate(-38 184 190)" fill="#e0ab76"/>
+      <circle cx="160" cy="226" r="7" fill="#e0ab76"/>
+    </g>
+    <!-- brows -->
+    <ellipse cx="206" cy="214" rx="14" ry="9" fill="#8a5a2b"/>
+    <ellipse cx="306" cy="214" rx="14" ry="9" fill="#8a5a2b"/>
+    <!-- eyes -->
+    <ellipse cx="208" cy="250" rx="14" ry="18" fill="#1d2433"/>
+    <ellipse cx="304" cy="250" rx="14" ry="18" fill="#1d2433"/>
+    <circle cx="203" cy="243" r="5.5" fill="#ffffff"/>
+    <circle cx="299" cy="243" r="5.5" fill="#ffffff"/>
+    <!-- muzzle -->
+    <g clip-path="url(#muzzle-c)">
+      <rect x="180" y="256" width="160" height="120" fill="#ddb788"/>
+      <rect x="180" y="256" width="160" height="120" fill="#f0d2a8" clip-path="url(#muzzle-lit)"/>
+    </g>
+    <use xlink:href="#muzzle" fill="none" stroke="#1d2433" stroke-width="8.5"/>
+    <!-- tongue -->
+    <path d="M240 334 L240 352 Q240 374 256 374 Q272 374 272 352 L272 334 Z" fill="#ff7a8a" stroke="#1d2433" stroke-width="8.5"/>
+    <path d="M256 344 L256 360" fill="none" stroke="#e0505f" stroke-width="5"/>
+    <!-- mouth -->
+    <path d="M256 304 L256 326 M220 322 Q238 344 256 326 Q274 344 292 322" fill="none" stroke="#1d2433" stroke-width="8.5"/>
+    <!-- nose -->
+    <path d="M230 286 Q256 274 282 286 Q288 294 278 304 L266 314 Q256 322 246 314 L234 304 Q224 294 230 286 Z" fill="#1d2433" stroke="#1d2433" stroke-width="4"/>
+    <ellipse cx="244" cy="288" rx="8" ry="4.5" fill="#ffffff" opacity="0.7"/>
+  </g>
+</svg>
